@@ -35,7 +35,7 @@ def verify_kaggle_paths():
     paths = {
         "Input Directory": "/kaggle/input",
         "Working Directory": "/kaggle/working",
-        "Dataset": "/kaggle/input/levir-cc-dataset/LEVIR-CC",
+        "Dataset": "/kaggle/input/levir-cc-dateset/LEVIR-CC",
         "CLIP Model": "/kaggle/input/clip-vit-b32",
         "Qwen Model": "/kaggle/input/qwen2.5-0.5b",
     }
@@ -90,7 +90,7 @@ def setup_kaggle_environment():
     if not verify_kaggle_paths():
         print("⚠️  WARNING: Some required paths not found!")
         print("Please ensure all 3 datasets are added to this notebook:")
-        print("  1. levir-cc-dataset")
+        print("  1. levir-cc-dateset")
         print("  2. clip-vit-b32")
         print("  3. qwen2.5-0.5b")
         return False
@@ -224,7 +224,7 @@ print("="*60)
 
 # Verify key paths
 paths_to_check = [
-    ("/kaggle/input/levir-cc-dataset/LEVIR-CC", "✅ Dataset"),
+    ("/kaggle/input/levir-cc-dateset/LEVIR-CC", "✅ Dataset"),
     ("/kaggle/input/clip-vit-b32/config.json", "✅ CLIP model"),
     ("/kaggle/input/qwen2.5-0.5b/config.json", "✅ Qwen model"),
 ]
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         print("\n📖 Instructions:")
         print("1. Create a new Kaggle Notebook")
         print("2. Add these 3 datasets (right panel → Input):")
-        print("   • levir-cc-dataset")
+        print("   • levir-cc-dateset")
         print("   • clip-vit-b32")
         print("   • qwen2.5-0.5b")
         print("3. Set GPU Accelerator to T4 x2")

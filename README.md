@@ -135,7 +135,7 @@ python -m src.train
 
 1. **创建 Kaggle Notebook**
 2. **添加数据集**（在右侧面板 → Input）：
-   - ✅ `levir-cc-dataset`
+   - ✅ `levir-cc-dateset`
    - ✅ `clip-vit-b32`
    - ✅ `qwen2.5-0.5b`
 3. **设置 GPU**：选择 T4 x2
