@@ -10,6 +10,7 @@ transformers>=4.37.0      # CLIP + Qwen 模型加载
 datasets>=2.14.0          # HuggingFace 数据集加载
 accelerate>=0.25.0        # 分布式训练加速
 peft>=0.7.0               # LoRA 微调支持
+pyarrow>=14.0.0           # Arrow 文件读取（datasets 依赖）
 
 # 模型优化
 bitsandbytes>=0.41.0      # 4位量化支持

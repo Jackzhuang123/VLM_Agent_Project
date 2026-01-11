@@ -161,6 +161,7 @@ print("=" * 60)
     peft>=0.7.0 \
     bitsandbytes>=0.41.0 \
     accelerate>=0.25.0 \
+    pyarrow>=14.0.0 \
     einops>=0.7.0 \
     scipy>=1.11.0 \
     tqdm
@@ -176,7 +177,8 @@ print("=" * 60)
 - ⚠️ 确保 GitHub 仓库 URL 正确：`https://github.com/Jackzhuang123/VLM_Agent_Project.git`
 - ⚠️ Kaggle 已预装 `torch` 和 `torchvision`，无需重新安装
 - ⚠️ `Pillow` 和 `numpy` 也已预装
-- ✅ 只需安装额外的依赖包：`transformers`, `datasets`, `peft`, `bitsandbytes`, `accelerate`, `einops`, `scipy`, `tqdm`
+- ✅ 需安装的依赖包：`transformers`, `datasets`, `peft`, `bitsandbytes`, `accelerate`, `pyarrow`, `einops`, `scipy`, `tqdm`
+- 📌 `pyarrow` 用于读取 Arrow 格式数据集文件（如 `levir-cc-train.arrow`）
 
 详细步骤请参考 [快速开始.md](./快速开始.md)
 

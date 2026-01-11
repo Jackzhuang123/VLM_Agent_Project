@@ -282,13 +282,12 @@ class LevirCCActionDataset(Dataset):
 
 def load_raw_levir_cc_dataset(dataset_path: str):
     """
-    从原始LEVIR-CC文件结构加载数据集
+    从原始LEVIR-CC文件结构或单个Arrow文件加载数据集
 
-    预期结构:
-    LEVIR-CC/
-      ├── images/train/A/ 和 B/
-      或
-      ├── A/ 和 B/
+    支持的结构:
+    1. 单个 .arrow 文件: LEVIR-CC/levir-cc-train.arrow
+    2. 图像目录结构: LEVIR-CC/images/train/A 和 B
+    3. 简化目录结构: LEVIR-CC/A 和 B
 
     Args:
         dataset_path: 数据集根目录路径
@@ -297,10 +296,45 @@ def load_raw_levir_cc_dataset(dataset_path: str):
         包含图像路径和标注的数据字典列表
     """
     from pathlib import Path
+    import pyarrow as pa
 
     print(f"\n🔄 尝试从原始结构加载数据集: {dataset_path}")
 
     dataset_path = Path(dataset_path)
+
+    # 首先检查是否有 .arrow 文件
+    arrow_files = list(dataset_path.glob('*.arrow'))
+    if arrow_files:
+        print(f"✅ 找到 Arrow 文件: {arrow_files[0].name}")
+        try:
+            # 尝试用 pyarrow 直接读取
+            import pyarrow.ipc as ipc
+            with pa.memory_map(str(arrow_files[0]), 'r') as source:
+                reader = ipc.open_file(source)
+                table = reader.read_all()
+
+            print(f"✅ Arrow 文件读取成功")
+            print(f"   列: {table.column_names}")
+            print(f"   行数: {len(table)}")
+
+            # 转换为 HuggingFace Dataset
+            dataset = datasets.Dataset(table)
+            return dataset
+
+        except Exception as e:
+            print(f"⚠️  Arrow 文件读取失败: {e}")
+            print(f"🔄 尝试用 datasets.load_dataset...")
+
+            try:
+                # 尝试用 datasets 库加载
+                dataset = datasets.load_dataset('arrow', data_files=str(arrow_files[0]), split='train')
+                print(f"✅ 使用 datasets 库加载成功: {len(dataset)} 个样本")
+                return dataset
+            except Exception as e2:
+                print(f"⚠️  datasets 库加载也失败: {e2}")
+
+    # 如果没有 Arrow 文件，尝试从图像目录加载
+    print(f"🔄 查找图像目录结构...")
 
     # 检查可能的目录结构
     possible_structures = [
@@ -332,9 +366,21 @@ def load_raw_levir_cc_dataset(dataset_path: str):
             break
 
     if valid_structure is None:
+        # 列出实际存在的文件/目录
+        print(f"\n📁 实际目录内容:")
+        if dataset_path.exists():
+            for item in dataset_path.iterdir():
+                if item.is_dir():
+                    print(f"   📁 {item.name}/")
+                else:
+                    print(f"   📄 {item.name}")
+
         raise FileNotFoundError(
             f"无法在 {dataset_path} 中找到有效的LEVIR-CC数据结构。\n"
-            f"预期结构: LEVIR-CC/images/train/A 和 B, 或 LEVIR-CC/A 和 B"
+            f"预期结构:\n"
+            f"  - LEVIR-CC/*.arrow 文件\n"
+            f"  - LEVIR-CC/images/train/A 和 B\n"
+            f"  - LEVIR-CC/A 和 B"
         )
 
     # 获取所有图像文件
@@ -404,26 +450,35 @@ def create_dataloaders(
         print(f"🔄 尝试从原始文件结构加载...")
 
         try:
-            # 从原始结构加载
-            raw_data_list = load_raw_levir_cc_dataset(Config.DATASET_PATH)
+            # 从原始结构加载（可能返回 Dataset 或 list）
+            raw_data = load_raw_levir_cc_dataset(Config.DATASET_PATH)
 
-            # 转换为HuggingFace Dataset格式
-            dataset_dict = {
-                'A': [item['A'] for item in raw_data_list],
-                'B': [item['B'] for item in raw_data_list],
-                'caption': [item['caption'] for item in raw_data_list],
-                'bbox': [item['bbox'] for item in raw_data_list],
-            }
+            # 检查返回类型
+            if isinstance(raw_data, datasets.Dataset):
+                # 已经是 Dataset 对象（从 Arrow 文件加载）
+                dataset_split = raw_data
+                print(f"✅ 从 Arrow 文件加载成功，共 {len(dataset_split)} 个样本")
+            else:
+                # 是列表（从图像目录加载）
+                # 转换为HuggingFace Dataset格式
+                dataset_dict = {
+                    'A': [item['A'] for item in raw_data],
+                    'B': [item['B'] for item in raw_data],
+                    'caption': [item['caption'] for item in raw_data],
+                    'bbox': [item['bbox'] for item in raw_data],
+                }
 
-            dataset_split = datasets.Dataset.from_dict(dataset_dict)
-            print(f"✅ 从原始结构加载成功，共 {len(dataset_split)} 个样本")
+                dataset_split = datasets.Dataset.from_dict(dataset_dict)
+                print(f"✅ 从图像目录加载成功，共 {len(dataset_split)} 个样本")
 
         except Exception as raw_e:
             print(f"❌ 原始结构加载也失败: {raw_e}")
+            import traceback
+            traceback.print_exc()
             raise RuntimeError(
                 f"无法加载数据集。尝试了:\n"
-                f"1. Arrow格式: {e}\n"
-                f"2. 原始结构: {raw_e}\n\n"
+                f"1. Arrow格式 (load_from_disk): {e}\n"
+                f"2. 原始结构/单Arrow文件: {raw_e}\n\n"
                 f"请检查数据集路径和结构是否正确。"
             )
 
