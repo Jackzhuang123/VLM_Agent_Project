@@ -69,49 +69,51 @@ class LevirCCActionDataset(Dataset):
             )
         ])
 
+        # 永久性地禁用自动解码以避免缓存文件加载错误
+        # 这在多进程 DataLoader 中是必需的
+        self._disable_auto_decoding()
+
         # Inspect first sample to understand data structure
         self._inspect_data_structure()
 
         print(f"✅ Dataset initialized with {len(self.dataset)} samples")
+
+    def _disable_auto_decoding(self):
+        """
+        永久性地禁用自动解码，特别是对于 Image 类型字段
+
+        为了在 DataLoader 多进程中也能工作，我们将 HuggingFace Dataset 转换为
+        一个简单的列表结构，避免 HuggingFace 的自动解码机制。
+        """
+        try:
+            # 检查是否有 Image 类型字段
+            if hasattr(self.dataset, 'features'):
+                from datasets.features import Image as HFImage
+                has_image = any(isinstance(feature, HFImage) for feature in self.dataset.features.values())
+
+                if has_image:
+                    print(f"⚠️  检测到 Image 类型字段，禁用自动解码...")
+                    # 首先设置为 python 格式
+                    self.dataset.set_format('python')
+
+                    # 然后转换为列表以完全绕过 HuggingFace 的自动解码
+                    print(f"🔄 正在将数据集转换为列表格式...")
+                    dataset_list = [self.dataset[i] for i in range(len(self.dataset))]
+
+                    # 用列表替换 HuggingFace Dataset
+                    self.dataset = dataset_list
+                    print(f"✅ 已转换为列表格式（{len(self.dataset)} 样本）")
+        except Exception as e:
+            print(f"⚠️  禁用自动解码失败: {e}")
+            print(f"🔄 将继续使用 HuggingFace Dataset，可能会有缓存问题")
 
     def _inspect_data_structure(self):
         """Inspect the first sample to understand data structure and keys"""
         if len(self.dataset) == 0:
             raise ValueError("Dataset is empty!")
 
-        # 禁用格式化以避免自动解码图像
-        # 这样可以访问原始的bytes数据而不是尝试从路径加载
-        try:
-            # 尝试使用 formatted_as(None) 访问原始数据
-            with self.dataset.formatted_as(None):
-                first_sample = self.dataset[0]
-        except Exception as e:
-            print(f"⚠️  formatted_as(None) 访问失败: {e}")
-            print(f"🔄 尝试直接访问数据集...")
-            try:
-                # 如果上面失败，尝试使用 set_format 禁用所有格式化
-                original_format = self.dataset.format
-                self.dataset.set_format('python')
-                first_sample = self.dataset[0]
-                # 恢复原始格式
-                if original_format and 'type' in original_format:
-                    self.dataset.set_format(type=original_format['type'])
-            except Exception as e2:
-                print(f"⚠️  direct 访问也失败: {e2}")
-                print(f"🔄 尝试只检查数据集的 feature 信息...")
-                # 降级方案：只从 feature 信息推断键名，不加载实际数据
-                first_sample = {}
-                if hasattr(self.dataset, 'features'):
-                    for key in self.dataset.features.keys():
-                        first_sample[key] = None
-                else:
-                    # 最后的降级方案：从第一个非image键构造样本
-                    first_sample = {
-                        'A': None,
-                        'B': None,
-                        'caption': None,
-                        'bbox': None,
-                    }
+        # 获取第一个样本
+        first_sample = self.dataset[0]
 
         print("\n" + "="*60)
         print("Dataset Structure Inspection")
@@ -215,24 +217,8 @@ class LevirCCActionDataset(Dataset):
                 - 'action_vector': Tensor - normalized action vector [cx, cy, scale]
                 - 'bbox': List - original bbox [x1, y1, x2, y2]
         """
-        # 禁用格式化以获取原始数据（bytes）而不是尝试从路径加载
-        try:
-            with self.dataset.formatted_as(None):
-                sample = self.dataset[idx]
-        except Exception as e:
-            print(f"⚠️  formatted_as(None) 访问失败: {e}")
-            print(f"🔄 尝试直接访问...")
-            try:
-                # 降级方案：使用 set_format('python')
-                original_format = self.dataset.format
-                self.dataset.set_format('python')
-                sample = self.dataset[idx]
-                # 恢复原始格式
-                if original_format and 'type' in original_format:
-                    self.dataset.set_format(type=original_format['type'])
-            except Exception as e2:
-                print(f"⚠️  direct 访问也失败: {e2}")
-                raise
+        # 直接访问数据集，因为我们已经在 __init__ 中禁用了自动解码
+        sample = self.dataset[idx]
 
         # Load images
         try:
