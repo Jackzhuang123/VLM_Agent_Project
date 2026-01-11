@@ -65,13 +65,21 @@ VLM_Agent_Project/
 │   ├── model.py                # VLM-VLA 模型架构
 │   ├── train.py                # 训练循环与验证
 │   └── utils.py                # 工具函数库
-├── requirements.txt            # Python 依赖
+├── requirements.txt            # Python 依赖（带注释说明）
 ├── README.md                   # 本文件（项目概览）
 ├── 快速开始.md                 # 快速部署指南
 ├── 项目指南.md                 # 详细技术文档
+├── KAGGLE部署清单.md           # Kaggle 完整部署清单 ⭐
 ├── check_setup.py              # 项目验证脚本
-└── kaggle_launch.py            # Kaggle 启动脚本
+├── kaggle_launch.py            # Kaggle 启动脚本
+└── kaggle_quick_start.py       # Kaggle 一键启动脚本 ⭐
 ```
+
+**文档说明**：
+- 📖 **README.md** - 快速了解项目（你现在所在的文档）
+- 🚀 **快速开始.md** - 详细的本地/Kaggle部署步骤
+- 📚 **项目指南.md** - 深入的技术细节和架构说明
+- ⭐ **KAGGLE部署清单.md** - Kaggle专用完整部署指南（推荐）
 
 ---
 
@@ -93,7 +101,7 @@ VLM_Agent_Project/
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/your-username/VLM_Agent_Project.git
+git clone https://github.com/Jackzhuang123/VLM_Agent_Project.git
 cd VLM_Agent_Project
 
 # 2. 创建虚拟环境
@@ -110,6 +118,19 @@ python check_setup.py
 python -m src.train
 ```
 
+**依赖包说明**：
+- `torch>=2.1.0` - PyTorch 深度学习框架
+- `transformers>=4.37.0` - HuggingFace Transformers（CLIP + Qwen）
+- `datasets>=2.14.0` - HuggingFace Datasets（数据加载）
+- `peft>=0.7.0` - Parameter-Efficient Fine-Tuning（LoRA）
+- `bitsandbytes>=0.41.0` - 4位量化支持
+- `accelerate>=0.25.0` - 分布式训练加速
+- `einops>=0.7.0` - 张量操作工具
+- `scipy>=1.11.0` - 科学计算库
+- `Pillow>=10.0.0` - 图像处理
+- `numpy>=1.24.0` - 数值计算
+- `tqdm` - 进度条显示
+
 ### Kaggle 部署（推荐）
 
 1. **创建 Kaggle Notebook**
@@ -123,17 +144,39 @@ python -m src.train
 ```python
 # Cell 1: 验证路径
 import os
+print("=" * 60)
+print("📦 检查 Kaggle Input 数据集")
+print("=" * 60)
 for item in os.listdir("/kaggle/input"):
     print(f"📁 {item}/")
+print("=" * 60)
 
-# Cell 2: 克隆仓库
-!git clone https://github.com/YOUR_USERNAME/VLM_Agent_Project.git
+# Cell 2: 克隆仓库并安装依赖
+!git clone https://github.com/Jackzhuang123/VLM_Agent_Project.git
 %cd VLM_Agent_Project
-!pip install -q datasets bitsandbytes peft
 
-# Cell 3: 开始训练
+# 安装所有必需的依赖包
+!pip install -q transformers>=4.37.0 \
+    datasets>=2.14.0 \
+    peft>=0.7.0 \
+    bitsandbytes>=0.41.0 \
+    accelerate>=0.25.0 \
+    einops>=0.7.0 \
+    scipy>=1.11.0 \
+    tqdm
+
+# Cell 3: 验证项目设置
+!python check_setup.py
+
+# Cell 4: 开始训练
 !python -m src.train
 ```
+
+**重要提示**：
+- ⚠️ 确保 GitHub 仓库 URL 正确：`https://github.com/Jackzhuang123/VLM_Agent_Project.git`
+- ⚠️ Kaggle 已预装 `torch` 和 `torchvision`，无需重新安装
+- ⚠️ `Pillow` 和 `numpy` 也已预装
+- ✅ 只需安装额外的依赖包：`transformers`, `datasets`, `peft`, `bitsandbytes`, `accelerate`, `einops`, `scipy`, `tqdm`
 
 详细步骤请参考 [快速开始.md](./快速开始.md)
 

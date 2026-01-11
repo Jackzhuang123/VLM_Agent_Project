@@ -1,12 +1,26 @@
-torch>=2.1.0
-transformers>=4.37.0
-accelerate>=0.25.0
-bitsandbytes>=0.41.0
-peft>=0.7.0
-diffusers>=0.24.0
-datasets>=2.14.0
-einops>=0.7.0
-scipy>=1.11.0
-Pillow>=10.0.0
-numpy>=1.24.0
+# VLM-VLA Agent 项目依赖
+# 用途说明见 README.md
+
+# 深度学习框架
+torch>=2.1.0              # PyTorch 深度学习框架
+torchvision>=0.16.0       # 视觉工具（图像变换）
+
+# HuggingFace 生态
+transformers>=4.37.0      # CLIP + Qwen 模型加载
+datasets>=2.14.0          # HuggingFace 数据集加载
+accelerate>=0.25.0        # 分布式训练加速
+peft>=0.7.0               # LoRA 微调支持
+
+# 模型优化
+bitsandbytes>=0.41.0      # 4位量化支持
+
+# 工具库
+einops>=0.7.0             # 张量操作工具
+scipy>=1.11.0             # 科学计算库
+Pillow>=10.0.0            # 图像处理
+numpy>=1.24.0             # 数值计算
+tqdm                      # 进度条显示
+
+# 可选依赖（Kaggle 环境可能不需要）
+# diffusers>=0.24.0       # 扩散模型（项目中未直接使用）
 
