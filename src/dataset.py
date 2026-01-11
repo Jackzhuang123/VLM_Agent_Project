@@ -81,8 +81,37 @@ class LevirCCActionDataset(Dataset):
 
         # 禁用格式化以避免自动解码图像
         # 这样可以访问原始的bytes数据而不是尝试从路径加载
-        with self.dataset.formatted_as(None):
-            first_sample = self.dataset[0]
+        try:
+            # 尝试使用 formatted_as(None) 访问原始数据
+            with self.dataset.formatted_as(None):
+                first_sample = self.dataset[0]
+        except Exception as e:
+            print(f"⚠️  formatted_as(None) 访问失败: {e}")
+            print(f"🔄 尝试直接访问数据集...")
+            try:
+                # 如果上面失败，尝试使用 set_format 禁用所有格式化
+                original_format = self.dataset.format
+                self.dataset.set_format('python')
+                first_sample = self.dataset[0]
+                # 恢复原始格式
+                if original_format and 'type' in original_format:
+                    self.dataset.set_format(type=original_format['type'])
+            except Exception as e2:
+                print(f"⚠️  direct 访问也失败: {e2}")
+                print(f"🔄 尝试只检查数据集的 feature 信息...")
+                # 降级方案：只从 feature 信息推断键名，不加载实际数据
+                first_sample = {}
+                if hasattr(self.dataset, 'features'):
+                    for key in self.dataset.features.keys():
+                        first_sample[key] = None
+                else:
+                    # 最后的降级方案：从第一个非image键构造样本
+                    first_sample = {
+                        'A': None,
+                        'B': None,
+                        'caption': None,
+                        'bbox': None,
+                    }
 
         print("\n" + "="*60)
         print("Dataset Structure Inspection")
@@ -91,7 +120,9 @@ class LevirCCActionDataset(Dataset):
         print(f"Sample keys: {list(first_sample.keys())}")
         print(f"Sample data types:")
         for key, value in first_sample.items():
-            if isinstance(value, (list, tuple)):
+            if value is None:
+                print(f"  {key}: None (detected from schema)")
+            elif isinstance(value, (list, tuple)):
                 print(f"  {key}: {type(value).__name__} of length {len(value)}")
             elif isinstance(value, dict) and 'bytes' in value:
                 print(f"  {key}: dict with 'bytes' (image data)")
@@ -172,8 +203,23 @@ class LevirCCActionDataset(Dataset):
                 - 'bbox': List - original bbox [x1, y1, x2, y2]
         """
         # 禁用格式化以获取原始数据（bytes）而不是尝试从路径加载
-        with self.dataset.formatted_as(None):
-            sample = self.dataset[idx]
+        try:
+            with self.dataset.formatted_as(None):
+                sample = self.dataset[idx]
+        except Exception as e:
+            print(f"⚠️  formatted_as(None) 访问失败: {e}")
+            print(f"🔄 尝试直接访问...")
+            try:
+                # 降级方案：使用 set_format('python')
+                original_format = self.dataset.format
+                self.dataset.set_format('python')
+                sample = self.dataset[idx]
+                # 恢复原始格式
+                if original_format and 'type' in original_format:
+                    self.dataset.set_format(type=original_format['type'])
+            except Exception as e2:
+                print(f"⚠️  direct 访问也失败: {e2}")
+                raise
 
         # Load images
         try:
@@ -340,6 +386,15 @@ def load_raw_levir_cc_dataset(dataset_path: str):
                 # 尝试用 datasets 库加载
                 dataset = datasets.load_dataset('arrow', data_files=str(arrow_files[0]), split='train')
                 print(f"✅ 使用 datasets 库加载成功: {len(dataset)} 个样本")
+
+                # 检查是否有 Image 类型字段，如果有则禁用自动解码
+                if hasattr(dataset, 'features'):
+                    from datasets.features import Image as HFImage
+                    has_image = any(isinstance(feature, HFImage) for feature in dataset.features.values())
+                    if has_image:
+                        print(f"⚠️  检测到 Image 类型字段，禁用自动解码以避免缓存加载...")
+                        dataset.set_format('python')
+
                 return dataset
             except Exception as e2:
                 print(f"⚠️  datasets 库加载也失败: {e2}")
@@ -455,6 +510,14 @@ def create_dataloaders(
             # If only one split exists, use it
             dataset_split = full_dataset
             print(f"⚠️  未找到 'train' 分割。使用整个数据集，共 {len(dataset_split)} 个样本")
+
+        # 检查是否有 Image 类型字段，如果有则禁用自动解码
+        if hasattr(dataset_split, 'features'):
+            from datasets.features import Image as HFImage
+            has_image = any(isinstance(feature, HFImage) for feature in dataset_split.features.values())
+            if has_image:
+                print(f"⚠️  检测到 Image 类型字段，禁用自动解码以避免缓存加载...")
+                dataset_split.set_format('python')
 
     except (FileNotFoundError, Exception) as e:
         print(f"⚠️  Arrow格式加载失败: {e}")
