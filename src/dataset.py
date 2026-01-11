@@ -79,7 +79,10 @@ class LevirCCActionDataset(Dataset):
         if len(self.dataset) == 0:
             raise ValueError("Dataset is empty!")
 
-        first_sample = self.dataset[0]
+        # 禁用格式化以避免自动解码图像
+        # 这样可以访问原始的bytes数据而不是尝试从路径加载
+        with self.dataset.formatted_as(None):
+            first_sample = self.dataset[0]
 
         print("\n" + "="*60)
         print("Dataset Structure Inspection")
@@ -90,6 +93,8 @@ class LevirCCActionDataset(Dataset):
         for key, value in first_sample.items():
             if isinstance(value, (list, tuple)):
                 print(f"  {key}: {type(value).__name__} of length {len(value)}")
+            elif isinstance(value, dict) and 'bytes' in value:
+                print(f"  {key}: dict with 'bytes' (image data)")
             else:
                 print(f"  {key}: {type(value).__name__}")
         print("="*60 + "\n")
@@ -166,7 +171,9 @@ class LevirCCActionDataset(Dataset):
                 - 'action_vector': Tensor - normalized action vector [cx, cy, scale]
                 - 'bbox': List - original bbox [x1, y1, x2, y2]
         """
-        sample = self.dataset[idx]
+        # 禁用格式化以获取原始数据（bytes）而不是尝试从路径加载
+        with self.dataset.formatted_as(None):
+            sample = self.dataset[idx]
 
         # Load images
         try:
@@ -217,15 +224,19 @@ class LevirCCActionDataset(Dataset):
         - PIL Image objects
         - Bytes (encoded images)
         - Paths (string or Path)
+        - HuggingFace Image dict with 'bytes' key
         """
         if isinstance(image_data, Image.Image):
             return image_data.convert('RGB')
+        elif isinstance(image_data, dict) and 'bytes' in image_data:
+            # HuggingFace Image feature format
+            return Image.open(io.BytesIO(image_data['bytes'])).convert('RGB')
         elif isinstance(image_data, bytes):
             return Image.open(io.BytesIO(image_data)).convert('RGB')
         elif isinstance(image_data, (str, Path)):
             return Image.open(image_data).convert('RGB')
         else:
-            raise TypeError(f"Unsupported image format: {type(image_data)}")
+            raise TypeError(f"Unsupported image format: {type(image_data)}, keys: {image_data.keys() if isinstance(image_data, dict) else 'N/A'}")
 
     def _process_bbox(self, bbox, image_size: Tuple[int, int]) -> torch.Tensor:
         """
