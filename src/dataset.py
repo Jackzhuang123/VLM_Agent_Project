@@ -84,6 +84,11 @@ class LevirCCActionDataset(Dataset):
 
         为了在 DataLoader 多进程中也能工作，我们将 HuggingFace Dataset 转换为
         一个简单的列表结构，避免 HuggingFace 的自动解码机制。
+
+        关键策略：不访问包含 Image 字段的数据（这会触发自动解码），而是：
+        1. 获取原始 PyArrow Table
+        2. 禁用所有列的解码器
+        3. 转换为列表
         """
         try:
             # 检查是否有 Image 类型字段
@@ -93,18 +98,35 @@ class LevirCCActionDataset(Dataset):
 
                 if has_image:
                     print(f"⚠️  检测到 Image 类型字段，禁用自动解码...")
-                    # 首先设置为 python 格式
-                    self.dataset.set_format('python')
 
-                    # 然后转换为列表以完全绕过 HuggingFace 的自动解码
+                    # 关键：禁用所有的特征解码器，防止自动解码触发
+                    self.dataset._format_type = None
+                    self.dataset._format_kwargs = {}
+                    self.dataset._format_columns = None
+
+                    # 使用 pyarrow 操作避免触发解码
                     print(f"🔄 正在将数据集转换为列表格式...")
-                    dataset_list = [self.dataset[i] for i in range(len(self.dataset))]
+
+                    # 获取原始 pyarrow table
+                    table = self.dataset.data
+
+                    # 将 pyarrow table 转换为字典列表
+                    dataset_list = []
+                    for i in range(len(table)):
+                        row_dict = {}
+                        for col_name in table.column_names:
+                            # 从 pyarrow 直接获取数据，不通过 HF 的解码机制
+                            col_data = table[col_name][i].as_py()
+                            row_dict[col_name] = col_data
+                        dataset_list.append(row_dict)
 
                     # 用列表替换 HuggingFace Dataset
                     self.dataset = dataset_list
                     print(f"✅ 已转换为列表格式（{len(self.dataset)} 样本）")
         except Exception as e:
             print(f"⚠️  禁用自动解码失败: {e}")
+            import traceback
+            traceback.print_exc()
             print(f"🔄 将继续使用 HuggingFace Dataset，可能会有缓存问题")
 
     def _inspect_data_structure(self):
@@ -396,15 +418,6 @@ def load_raw_levir_cc_dataset(dataset_path: str):
                 # 尝试用 datasets 库加载
                 dataset = datasets.load_dataset('arrow', data_files=str(arrow_files[0]), split='train')
                 print(f"✅ 使用 datasets 库加载成功: {len(dataset)} 个样本")
-
-                # 检查是否有 Image 类型字段，如果有则禁用自动解码
-                if hasattr(dataset, 'features'):
-                    from datasets.features import Image as HFImage
-                    has_image = any(isinstance(feature, HFImage) for feature in dataset.features.values())
-                    if has_image:
-                        print(f"⚠️  检测到 Image 类型字段，禁用自动解码以避免缓存加载...")
-                        dataset.set_format('python')
-
                 return dataset
             except Exception as e2:
                 print(f"⚠️  datasets 库加载也失败: {e2}")
@@ -521,13 +534,6 @@ def create_dataloaders(
             dataset_split = full_dataset
             print(f"⚠️  未找到 'train' 分割。使用整个数据集，共 {len(dataset_split)} 个样本")
 
-        # 检查是否有 Image 类型字段，如果有则禁用自动解码
-        if hasattr(dataset_split, 'features'):
-            from datasets.features import Image as HFImage
-            has_image = any(isinstance(feature, HFImage) for feature in dataset_split.features.values())
-            if has_image:
-                print(f"⚠️  检测到 Image 类型字段，禁用自动解码以避免缓存加载...")
-                dataset_split.set_format('python')
 
     except (FileNotFoundError, Exception) as e:
         print(f"⚠️  Arrow格式加载失败: {e}")
