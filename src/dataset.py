@@ -280,6 +280,84 @@ class LevirCCActionDataset(Dataset):
             return torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
 
 
+def load_raw_levir_cc_dataset(dataset_path: str):
+    """
+    从原始LEVIR-CC文件结构加载数据集
+
+    预期结构:
+    LEVIR-CC/
+      ├── images/train/A/ 和 B/
+      或
+      ├── A/ 和 B/
+
+    Args:
+        dataset_path: 数据集根目录路径
+
+    Returns:
+        包含图像路径和标注的数据字典列表
+    """
+    from pathlib import Path
+
+    print(f"\n🔄 尝试从原始结构加载数据集: {dataset_path}")
+
+    dataset_path = Path(dataset_path)
+
+    # 检查可能的目录结构
+    possible_structures = [
+        # 结构1: LEVIR-CC/images/train/A, B
+        {
+            'img_a': dataset_path / 'images' / 'train' / 'A',
+            'img_b': dataset_path / 'images' / 'train' / 'B',
+        },
+        # 结构2: LEVIR-CC/A, B
+        {
+            'img_a': dataset_path / 'A',
+            'img_b': dataset_path / 'B',
+        },
+        # 结构3: LEVIR-CC/train/A, B
+        {
+            'img_a': dataset_path / 'train' / 'A',
+            'img_b': dataset_path / 'train' / 'B',
+        },
+    ]
+
+    # 找到存在的结构
+    valid_structure = None
+    for structure in possible_structures:
+        if structure['img_a'].exists() and structure['img_b'].exists():
+            valid_structure = structure
+            print(f"✅ 找到有效结构:")
+            print(f"   图像A目录: {structure['img_a']}")
+            print(f"   图像B目录: {structure['img_b']}")
+            break
+
+    if valid_structure is None:
+        raise FileNotFoundError(
+            f"无法在 {dataset_path} 中找到有效的LEVIR-CC数据结构。\n"
+            f"预期结构: LEVIR-CC/images/train/A 和 B, 或 LEVIR-CC/A 和 B"
+        )
+
+    # 获取所有图像文件
+    img_a_files = sorted(list(valid_structure['img_a'].glob('*.png')) +
+                        list(valid_structure['img_a'].glob('*.jpg')))
+    img_b_files = sorted(list(valid_structure['img_b'].glob('*.png')) +
+                        list(valid_structure['img_b'].glob('*.jpg')))
+
+    print(f"✅ 找到 {len(img_a_files)} 对图像")
+
+    # 构建数据集（使用默认标注）
+    dataset_list = []
+    for img_a_path, img_b_path in zip(img_a_files, img_b_files):
+        dataset_list.append({
+            'A': str(img_a_path),
+            'B': str(img_b_path),
+            'caption': 'A change has occurred in the remote sensing image.',
+            'bbox': [0, 0, 256, 256],  # 默认bbox，将在后续被归一化
+        })
+
+    return dataset_list
+
+
 def create_dataloaders(
     batch_size: int = 4,
     num_workers: int = 4,
@@ -302,28 +380,52 @@ def create_dataloaders(
         raise ImportError("datasets library is required. Install with: pip install datasets")
 
     print("\n" + "="*60)
-    print("Loading LEVIR-CC Dataset from Arrow Format")
+    print("加载 LEVIR-CC 数据集")
     print("="*60)
-    print(f"Dataset path: {Config.DATASET_PATH}")
+    print(f"数据集路径: {Config.DATASET_PATH}")
 
     try:
-        # Load dataset from disk (Arrow format)
+        # 首先尝试从Arrow格式加载
         full_dataset = datasets.load_from_disk(Config.DATASET_PATH)
-        print(f"✅ Dataset loaded successfully")
-        print(f"   Dataset structure: {full_dataset}")
+        print(f"✅ 从Arrow格式加载成功")
+        print(f"   数据集结构: {full_dataset}")
 
         # Get the appropriate split
         if 'train' in full_dataset:
             dataset_split = full_dataset['train']
-            print(f"✅ Using 'train' split with {len(dataset_split)} samples")
+            print(f"✅ 使用 'train' 分割，共 {len(dataset_split)} 个样本")
         else:
             # If only one split exists, use it
             dataset_split = full_dataset
-            print(f"⚠️  No 'train' split found. Using entire dataset with {len(dataset_split)} samples")
+            print(f"⚠️  未找到 'train' 分割。使用整个数据集，共 {len(dataset_split)} 个样本")
 
-    except Exception as e:
-        print(f"❌ Error loading dataset: {e}")
-        raise
+    except (FileNotFoundError, Exception) as e:
+        print(f"⚠️  Arrow格式加载失败: {e}")
+        print(f"🔄 尝试从原始文件结构加载...")
+
+        try:
+            # 从原始结构加载
+            raw_data_list = load_raw_levir_cc_dataset(Config.DATASET_PATH)
+
+            # 转换为HuggingFace Dataset格式
+            dataset_dict = {
+                'A': [item['A'] for item in raw_data_list],
+                'B': [item['B'] for item in raw_data_list],
+                'caption': [item['caption'] for item in raw_data_list],
+                'bbox': [item['bbox'] for item in raw_data_list],
+            }
+
+            dataset_split = datasets.Dataset.from_dict(dataset_dict)
+            print(f"✅ 从原始结构加载成功，共 {len(dataset_split)} 个样本")
+
+        except Exception as raw_e:
+            print(f"❌ 原始结构加载也失败: {raw_e}")
+            raise RuntimeError(
+                f"无法加载数据集。尝试了:\n"
+                f"1. Arrow格式: {e}\n"
+                f"2. 原始结构: {raw_e}\n\n"
+                f"请检查数据集路径和结构是否正确。"
+            )
 
     # Create train/val split
     split_dataset = dataset_split.train_test_split(

@@ -235,16 +235,29 @@ MAX_TEXT_LENGTH = 128        # 文本最大长度
 
 ## 🔧 常见问题
 
-### ❓ 错误："Dataset not found"
+### ❓ 错误："Dataset not found" 或 "Directory is neither a Dataset nor DatasetDict"
+
+**原因**: 数据集路径配置错误，或数据集不是Arrow格式
 
 **解决方案**：
 ```python
-# 检查精确路径
+# 步骤1: 运行诊断脚本检查数据集结构
+!python kaggle_dataset_check.py
+
+# 步骤2: 检查精确路径
 import os
 for root, dirs, files in os.walk("/kaggle/input"):
-    print(root)
+    if 'levir' in root.lower():
+        print(root)
+
+# 步骤3: 更新 src/config.py 中的路径
+# 确保路径指向 LEVIR-CC 根目录，例如:
+# KAGGLE_PATHS = {
+#     'dataset': '/kaggle/input/levir-cc-dateset/LEVIR-CC'
+# }
 ```
-然后更新 `config.py` 中的路径。
+
+**注意**: 从v1.1开始，项目支持自动从原始LEVIR-CC文件结构加载数据，无需Arrow格式转换。
 
 ### ❓ 错误："CUDA out of memory"
 
