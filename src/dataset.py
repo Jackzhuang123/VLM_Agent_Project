@@ -158,20 +158,31 @@ class LevirCCActionDataset(Dataset):
         for key in candidates:
             if key in sample:
                 return key
+        # 如果只有单张图像，返回相同的图像键
+        # 这样 image_t2 就会重复使用同一张图像
+        for key in ['image', 'A', 'img', 'image1']:
+            if key in sample:
+                print(f"⚠️  未找到 image2 键，将使用 '{key}' 作为 image2（重复使用同一张图像）")
+                return key
         raise KeyError(f"Could not find image2 key. Available keys: {list(sample.keys())}")
 
     @staticmethod
     def _detect_caption_key(sample: Dict) -> str:
         """Detect the key for caption/description"""
-        candidates = ['caption', 'text', 'description', 'change_description']
+        candidates = ['caption', 'text', 'description', 'change_description', 'label']
         for key in candidates:
             if key in sample:
+                if key == 'label':
+                    print(f"⚠️  未找到 caption 键，将使用 'label' 字段")
                 return key
         # Default to first non-image key if no caption found
         for key in sample.keys():
             if key not in ['image', 'A', 'img', 'image1', 'image2', 'B', 'img2', 'image_2', 'bbox', 'bboxes']:
+                print(f"⚠️  未找到 caption 键，使用默认的第一个非图像键: '{key}'")
                 return key
-        raise KeyError(f"Could not find caption key. Available keys: {list(sample.keys())}")
+        # 如果完全没有找到，返回一个默认值
+        print(f"⚠️  未找到任何 caption 键，将使用默认描述")
+        return None
 
     @staticmethod
     def _detect_bbox_key(sample: Dict) -> str:
@@ -180,7 +191,9 @@ class LevirCCActionDataset(Dataset):
         for key in candidates:
             if key in sample:
                 return key
-        raise KeyError(f"Could not find bbox key. Available keys: {list(sample.keys())}")
+        # 如果没有 bbox，返回 None，稍后会使用默认值
+        print(f"⚠️  未找到 bbox 键，将使用默认的全图 bbox")
+        return None
 
     def __len__(self) -> int:
         """Return dataset size"""
@@ -231,22 +244,33 @@ class LevirCCActionDataset(Dataset):
 
         # Get caption
         try:
-            caption = str(sample[self.caption_key])
-            if not caption or caption.lower() in ['none', 'nan', '']:
+            if self.caption_key is None:
                 caption = "change detected"
+            else:
+                caption = str(sample[self.caption_key])
+                # 如果 caption 是数字（label），转换为文本描述
+                if caption.isdigit():
+                    caption = f"class {caption}"
+                elif not caption or caption.lower() in ['none', 'nan', '']:
+                    caption = "change detected"
         except Exception as e:
             print(f"⚠️  Error loading caption at index {idx}: {e}")
             caption = "change detected"
 
         # Get and process bbox
         try:
-            bbox = sample[self.bbox_key]
-            action_vector = self._process_bbox(bbox, image_t1.size)
+            if self.bbox_key is None:
+                # 使用默认的全图 bbox
+                bbox = [0, 0, image_t1.size[0], image_t1.size[1]]
+                action_vector = torch.tensor([0.5, 0.5, 1.0], dtype=torch.float32)
+            else:
+                bbox = sample[self.bbox_key]
+                action_vector = self._process_bbox(bbox, image_t1.size)
         except Exception as e:
             print(f"⚠️  Warning: Could not process bbox at index {idx}: {e}")
             # Default action vector if bbox fails
             action_vector = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
-            bbox = [0, 0, 224, 224]
+            bbox = [0, 0, image_t1.size[0], image_t1.size[1]]
 
         # Transform images
         image_t1 = self.image_transform(image_t1)
