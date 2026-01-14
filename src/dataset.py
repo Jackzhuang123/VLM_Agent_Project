@@ -91,6 +91,11 @@ class LevirCCActionDataset(Dataset):
         3. 转换为列表
         """
         try:
+            # 首先检查是否是 IndexedDataset 包装对象
+            if hasattr(self.dataset, '__class__') and self.dataset.__class__.__name__ == 'IndexedDataset':
+                print(f"ℹ️  检测到 IndexedDataset 包装对象，跳过自动解码禁用")
+                return
+
             # 检查是否有 Image 类型字段
             if hasattr(self.dataset, 'features'):
                 from datasets.features import Image as HFImage
@@ -127,7 +132,7 @@ class LevirCCActionDataset(Dataset):
             print(f"⚠️  禁用自动解码失败: {e}")
             import traceback
             traceback.print_exc()
-            print(f"🔄 将继续使用 HuggingFace Dataset，可能会有缓存问题")
+            print(f"🔄 将继续使用原始数据集，可能会有缓存问题")
 
     def _inspect_data_structure(self):
         """Inspect the first sample to understand data structure and keys"""
@@ -573,10 +578,72 @@ def create_dataloaders(
             )
 
     # Create train/val split
-    split_dataset = dataset_split.train_test_split(
-        test_size=test_split,
-        seed=seed
-    )
+    # 注意：在 Kaggle 环境中，/kaggle/input/ 是只读的
+    # 我们需要设置 HF_DATASETS_CACHE 到可写目录
+    import os
+    import numpy as np
+
+    # 确保缓存目录指向可写位置
+    cache_dir = os.path.join(Config.WORKING_DIR, '.cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ['HF_DATASETS_CACHE'] = cache_dir
+
+    # 对于只读文件系统（Kaggle），使用手动分割而不是 HF 的 train_test_split
+    # 这避免了在输入目录中创建临时文件
+    print(f"🔄 正在分割数据集 (train: {1-test_split:.1%}, test: {test_split:.1%})...")
+
+    n_samples = len(dataset_split)
+    indices = np.arange(n_samples)
+
+    # 设置随机种子以保证重现性
+    np.random.seed(seed)
+
+    # 随机打乱索引
+    np.random.shuffle(indices)
+
+    # 分割
+    split_point = int(n_samples * (1 - test_split))
+    train_indices = indices[:split_point]
+    test_indices = indices[split_point:]
+
+    # 转换为列表并排序（使数据更连贯）
+    train_indices = sorted(train_indices.tolist())
+    test_indices = sorted(test_indices.tolist())
+
+    try:
+        # 尝试使用 select 方法（在可写系统中可能会缓存）
+        split_dataset = {
+            'train': dataset_split.select(train_indices),
+            'test': dataset_split.select(test_indices)
+        }
+    except OSError as e:
+        if "Read-only file system" in str(e) or "No space left" in str(e):
+            print(f"⚠️  数据集操作中遇到文件系统错误，使用直接索引访问...")
+            # 降级方案：创建一个包装对象，在访问时进行过滤
+            class IndexedDataset:
+                def __init__(self, dataset, indices):
+                    self.dataset = dataset
+                    self.indices = indices
+                    self._len = len(indices)
+
+                def __len__(self):
+                    return self._len
+
+                def __getitem__(self, idx):
+                    return self.dataset[self.indices[idx]]
+
+                def train_test_split(self, *args, **kwargs):
+                    # 防止再次调用 train_test_split
+                    raise RuntimeError("Cannot split an already indexed dataset")
+
+            split_dataset = {
+                'train': IndexedDataset(dataset_split, train_indices),
+                'test': IndexedDataset(dataset_split, test_indices)
+            }
+        else:
+            raise
+
+    print(f"✅ 数据集分割完成: 训练集 {len(split_dataset['train'])} 个样本，测试集 {len(split_dataset['test'])} 个样本")
 
     train_dataset = LevirCCActionDataset(
         split_dataset['train'],
