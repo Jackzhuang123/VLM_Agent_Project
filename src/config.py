@@ -18,7 +18,7 @@ class Config:
 
     if IS_KAGGLE:
         # Kaggle 环境路径
-        DATASET_PATH = "/kaggle/input/levir-cc-dateset/LEVIR-CC"
+        DATASET_PATH = "/kaggle/input/levir-cc-dataset/LEVIR-CC"
         CLIP_PATH = "/kaggle/input/model-data-set/models/clip-vit-b32"
         LLM_PATH = "/kaggle/input/model-data-set/models/qwen2.5-0.5b"
         OUTPUT_DIR = "/kaggle/working/output"
