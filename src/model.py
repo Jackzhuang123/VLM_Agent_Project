@@ -30,7 +30,7 @@ class VLM_ActionAgent(nn.Module):
            - 输出维度：768 维
 
         2. 特征投影层：
-           - 将双时相特征（768*2=1536维）投影到 LLM 嵌入空间（1024维）
+           - 将双时相特征（768*2=1536维）投影到 LLM 嵌入空间（896维）
            - 实现维度适配
 
         3. 语言模型 (Qwen2.5-0.5B with LoRA)：
@@ -54,9 +54,9 @@ class VLM_ActionAgent(nn.Module):
              ↓
         拼接：(B, 1536)
              ↓
-        投影：(B, 1024)
+        投影：(B, 896)
              ↓
-        LLM编码 + 融合：(B, 1024)
+        LLM编码 + 融合：(B, 896)
              ↓
         动作预测：(B, 3)
     """
@@ -104,11 +104,11 @@ class VLM_ActionAgent(nn.Module):
 
         # Create projector: Concatenated temporal CLIP features -> LLM embedding dim
         # Input: 2 * VISION_OUTPUT_DIM (双时相图像特征拼接) = 1536
-        # Output: LLM_HIDDEN_DIM = 1024
-        # 这个投影层将两张图像的特征从 1536 维投影到 1024 维
+        # Output: LLM_HIDDEN_DIM = 896
+        # 这个投影层将两张图像的特征从 1536 维投影到 896 维
         self.projector = nn.Linear(
             Config.VISION_OUTPUT_DIM * 2,  # 768 * 2 = 1536
-            Config.LLM_HIDDEN_DIM  # 1024
+            Config.LLM_HIDDEN_DIM  # 896
         )
 
         print(f"✅ Projector 配置:")
@@ -282,8 +282,8 @@ class VLM_ActionAgent(nn.Module):
         temporal_features = torch.cat([vision_features_t1, vision_features_t2], dim=-1)  # (B, 1536) - 双时相拼接
 
         # Project to LLM hidden dim
-        # 投影层：(B, 1536) -> (B, 1024)
-        temporal_features = self.projector(temporal_features)  # (B, 1024)
+        # 投影层：(B, 1536) -> (B, 896)
+        temporal_features = self.projector(temporal_features)  # (B, 896)
 
         # Tokenize captions
         caption_tokens = self.llm_tokenizer(
@@ -304,10 +304,10 @@ class VLM_ActionAgent(nn.Module):
 
         # Get final hidden state and combine with vision features
         llm_hidden_states = llm_outputs.hidden_states[-1]  # (B, seq_len, hidden_dim)
-        llm_pooled = llm_hidden_states[:, 0, :]  # Use CLS token equivalent (B, hidden_dim)
+        llm_pooled = llm_hidden_states[:, 0, :]  # Use CLS token equivalent (B, 896)
 
         # Fuse vision and language features
-        fused_features = temporal_features + llm_pooled  # Element-wise addition (B, hidden_dim)
+        fused_features = temporal_features + llm_pooled  # Element-wise addition (B, 896)
 
         # Predict action vector
         action_pred = self.action_head(fused_features)  # (B, 3)

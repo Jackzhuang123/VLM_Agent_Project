@@ -80,7 +80,7 @@ class Config:
 
     # 语言模型 (Qwen)
     LLM_MODEL_NAME = "Qwen/Qwen2.5-0.5B"
-    LLM_HIDDEN_DIM = 1024  # LLM 隐藏维度和投影层输出维度
+    LLM_HIDDEN_DIM = 896  # Qwen2.5-0.5B 隐藏维度
     LLM_NUM_LAYERS = 24
 
     # LoRA 配置
