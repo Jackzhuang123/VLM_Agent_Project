@@ -27,10 +27,10 @@ class VLM_ActionAgent(nn.Module):
         1. 视觉编码器 (CLIP-ViT-B32)：
            - 冻结的参数（不训练）
            - 将两张时序影像编码为视觉特征向量
-           - 输出维度：512 维
+           - 输出维度：768 维
 
         2. 特征投影层：
-           - 将双时相特征（512*2=1024维）投影到 LLM 嵌入空间（1024维）
+           - 将双时相特征（768*2=1536维）投影到 LLM 嵌入空间（1024维）
            - 实现维度适配
 
         3. 语言模型 (Qwen2.5-0.5B with LoRA)：
@@ -50,9 +50,9 @@ class VLM_ActionAgent(nn.Module):
     数据流：
         输入: (batch_size, 3, 224, 224) 图像对 + 文本
              ↓
-        CLIP编码：2 × (B, 512)
+        CLIP编码：2 × (B, 768)
              ↓
-        拼接：(B, 1024)
+        拼接：(B, 1536)
              ↓
         投影：(B, 1024)
              ↓
@@ -236,7 +236,7 @@ class VLM_ActionAgent(nn.Module):
             images: Tensor of shape (B, 3, H, W) - Already preprocessed
 
         Returns:
-            Tensor of shape (B, vision_hidden_dim) - CLIP features
+            Tensor of shape (B, 768) - CLIP ViT-B/32 pooled features
         """
         with torch.no_grad():  # Don't track gradients for frozen encoder
             clip_outputs = self.clip_model.vision_model(images)
@@ -275,14 +275,14 @@ class VLM_ActionAgent(nn.Module):
         batch_size = images_t1.shape[0]
 
         # Extract vision features from both temporal images
-        vision_features_t1 = self.extract_vision_features(images_t1)  # (B, 768)
-        vision_features_t2 = self.extract_vision_features(images_t2)  # (B, 768)
+        vision_features_t1 = self.extract_vision_features(images_t1)  # (B, 768) - CLIP ViT-B/32 输出
+        vision_features_t2 = self.extract_vision_features(images_t2)  # (B, 768) - CLIP ViT-B/32 输出
 
         # Concatenate temporal features and project to LLM space
-        temporal_features = torch.cat([vision_features_t1, vision_features_t2], dim=-1)  # (B, 1536)
+        temporal_features = torch.cat([vision_features_t1, vision_features_t2], dim=-1)  # (B, 1536) - 双时相拼接
 
         # Project to LLM hidden dim
-        # temporal_features: (B, 1536) -> (B, 1024)
+        # 投影层：(B, 1536) -> (B, 1024)
         temporal_features = self.projector(temporal_features)  # (B, 1024)
 
         # Tokenize captions
