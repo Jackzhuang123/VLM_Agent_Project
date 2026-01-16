@@ -364,6 +364,9 @@ class Trainer:
         """
         Save model checkpoint
 
+        优化：只保存模型权重和训练指标，不保存优化器状态以节省磁盘空间
+        这使得检查点大小减少约 70%，适应 Kaggle 的磁盘限制
+
         Args:
             step: Global training step
             is_best: Whether this is the best model
@@ -371,12 +374,14 @@ class Trainer:
         checkpoint_name = f"checkpoint_step_{step}.pt" if step else "checkpoint_latest.pt"
         checkpoint_path = self.checkpoint_dir / checkpoint_name
 
+        # 轻量级检查点：只保存必要的信息以恢复模型推理
+        # 为了节省 Kaggle 磁盘空间，移除了优化器和调度器的完整状态
+        # 这允许继续训练需要重新创建优化器，但节省大量磁盘空间
         checkpoint = {
             'epoch': self.epoch,
             'global_step': self.global_step,
             'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
+            # 注：optimizer_state_dict 和 scheduler_state_dict 已移除以节省磁盘空间
             'metrics': self.metrics,
             'config': {
                 'max_epochs': self.config.MAX_EPOCHS,
@@ -385,15 +390,46 @@ class Trainer:
             }
         }
 
-        torch.save(checkpoint, checkpoint_path)
-        print(f"✅ Checkpoint saved: {checkpoint_path}")
+        try:
+            torch.save(checkpoint, checkpoint_path)
+            print(f"✅ Checkpoint saved: {checkpoint_path}")
+        except RuntimeError as e:
+            print(f"⚠️  检查点保存失败: {e}")
+            print("⚠️  可能是磁盘空间不足，继续训练...")
+            return
 
         # Also save best checkpoint
         if is_best or self.best_loss > (self.metrics['val']['loss'][-1] if self.metrics['val']['loss'] else float('inf')):
             best_path = self.checkpoint_dir / "checkpoint_best.pt"
-            torch.save(checkpoint, best_path)
-            self.best_loss = self.metrics['val']['loss'][-1] if self.metrics['val']['loss'] else float('inf')
-            print(f"✅ Best checkpoint updated: {best_path}")
+            try:
+                torch.save(checkpoint, best_path)
+                self.best_loss = self.metrics['val']['loss'][-1] if self.metrics['val']['loss'] else float('inf')
+                print(f"✅ Best checkpoint updated: {best_path}")
+            except RuntimeError as e:
+                print(f"⚠️  最优检查点保存失败: {e}")
+
+    def cleanup_old_checkpoints(self, keep_count: int = 3):
+        """
+        清理旧检查点以节省磁盘空间
+        只保留最新的 keep_count 个检查点
+
+        Args:
+            keep_count: 要保留的最新检查点数量（默认 3）
+        """
+        checkpoint_files = sorted(
+            self.checkpoint_dir.glob("checkpoint_step_*.pt"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+
+        # 保留最新的 keep_count 个检查点，删除其他的
+        if len(checkpoint_files) > keep_count:
+            for old_checkpoint in checkpoint_files[keep_count:]:
+                try:
+                    old_checkpoint.unlink()
+                    print(f"🗑️  删除旧检查点: {old_checkpoint.name}")
+                except Exception as e:
+                    print(f"⚠️  无法删除 {old_checkpoint.name}: {e}")
 
     def save_metrics(self):
         """Save training metrics to JSON"""
@@ -447,6 +483,9 @@ class Trainer:
             # Save checkpoint
             is_best = val_loss < self.best_loss
             self.save_checkpoint(step=self.epoch, is_best=is_best)
+
+            # Cleanup old checkpoints to save disk space
+            self.cleanup_old_checkpoints(keep_count=3)
 
             print(f"{'='*60}")
 
