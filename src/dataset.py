@@ -192,6 +192,21 @@ class LevirCCActionDataset(Dataset):
         # 检查关键字段缺失并给出警告
         self._check_critical_fields()
 
+    def _check_critical_fields(self):
+        """检查关键字段是否存在"""
+        critical_fields_ok = True
+
+        if self.image_key is None:
+            print(f"⚠️  Warning: 未找到主图像字段")
+            critical_fields_ok = False
+
+        if self.image2_key is None:
+            print(f"⚠️  Warning: 未找到第二张时序图像字段")
+            critical_fields_ok = False
+
+        if critical_fields_ok:
+            print(f"✅ 所有关键字段检查通过\n")
+
     @staticmethod
     def _detect_image_key(sample: Dict) -> str:
         """Detect the key for temporal image 1"""
