@@ -21,11 +21,44 @@ from .config import Config
 
 class VLM_ActionAgent(nn.Module):
     """
-    VLM-VLA Agent 组合了:
-    1. 视觉编码器 (CLIP-ViT-B32): 冻结的图像特征提取
-    2. 投影层: 将 CLIP 特征投影到 LLM 嵌入空间
-    3. LLM (Qwen2.5-0.5B with LoRA): 文本理解和动作推理
-    4. 动作头 (MLP): 预测归一化的动作向量 [cx, cy, scale]
+    VLM-VLA（视觉语言模型-视觉语言动作）Agent
+
+    核心架构说明：
+        1. 视觉编码器 (CLIP-ViT-B32)：
+           - 冻结的参数（不训练）
+           - 将两张时序影像编码为视觉特征向量
+           - 输出维度：512 维
+
+        2. 特征投影层：
+           - 将双时相特征（512*2=1024维）投影到 LLM 嵌入空间（1024维）
+           - 实现维度适配
+
+        3. 语言模型 (Qwen2.5-0.5B with LoRA)：
+           - 使用 LoRA 进行参数高效微调（只训练 ~0.1% 参数）
+           - 4位量化减少显存占用
+           - 进行文本理解和语义编码
+
+        4. 特征融合模块：
+           - 组合视觉特征和语言特征
+           - 产生多模态表示
+
+        5. 动作预测头 (MLP)：
+           - 3层 MLP 网络
+           - 预测动作向量：[中心x, 中心y, 尺度]
+           - 输出范围：[0, 1]³（归一化）
+
+    数据流：
+        输入: (batch_size, 3, 224, 224) 图像对 + 文本
+             ↓
+        CLIP编码：2 × (B, 512)
+             ↓
+        拼接：(B, 1024)
+             ↓
+        投影：(B, 1024)
+             ↓
+        LLM编码 + 融合：(B, 1024)
+             ↓
+        动作预测：(B, 3)
     """
 
     def __init__(
@@ -39,12 +72,17 @@ class VLM_ActionAgent(nn.Module):
         """
         初始化 VLM-VLA Agent
 
+        参数初始化流程：
+        1. 加载冻结的 CLIP 视觉编码器
+        2. 加载 LLM 并应用 LoRA
+        3. 初始化投影层和动作头
+
         Args:
-            clip_path: 本地 CLIP 模型路径
-            llm_path: 本地 LLM 模型路径
-            freeze_vision: 是否冻结视觉编码器
-            use_lora: 是否对 LLM 使用 LoRA
-            use_4bit: 是否对 LLM 使用 4 位量化
+            clip_path (str): 本地 CLIP 模型路径（预训练权重）
+            llm_path (str): 本地 LLM 模型路径（预训练权重）
+            freeze_vision (bool): 是否冻结 CLIP 视觉编码器（推荐 True）
+            use_lora (bool): 是否对 LLM 使用 LoRA 微调（推荐 True）
+            use_4bit (bool): 是否对 LLM 使用 4 位量化（节省显存）
         """
         super().__init__()
 
@@ -64,11 +102,18 @@ class VLM_ActionAgent(nn.Module):
         # Load LLM
         self._load_llm(use_4bit=use_4bit)
 
-        # Create projector: CLIP feature dim -> LLM embedding dim
+        # Create projector: Concatenated temporal CLIP features -> LLM embedding dim
+        # Input: 2 * VISION_OUTPUT_DIM (双时相图像特征拼接) = 1536
+        # Output: LLM_HIDDEN_DIM = 1024
+        # 这个投影层将两张图像的特征从 1536 维投影到 1024 维
         self.projector = nn.Linear(
-            Config.VISION_OUTPUT_DIM,
-            Config.LLM_HIDDEN_DIM
+            Config.VISION_OUTPUT_DIM * 2,  # 768 * 2 = 1536
+            Config.LLM_HIDDEN_DIM  # 1024
         )
+
+        print(f"✅ Projector 配置:")
+        print(f"   输入维度: {Config.VISION_OUTPUT_DIM * 2}")
+        print(f"   输出维度: {Config.LLM_HIDDEN_DIM}")
 
         # Action head: Predict action vector [cx, cy, scale]
         self.action_head = nn.Sequential(
@@ -230,15 +275,15 @@ class VLM_ActionAgent(nn.Module):
         batch_size = images_t1.shape[0]
 
         # Extract vision features from both temporal images
-        vision_features_t1 = self.extract_vision_features(images_t1)  # (B, 512)
-        vision_features_t2 = self.extract_vision_features(images_t2)  # (B, 512)
+        vision_features_t1 = self.extract_vision_features(images_t1)  # (B, 768)
+        vision_features_t2 = self.extract_vision_features(images_t2)  # (B, 768)
 
         # Concatenate temporal features and project to LLM space
-        temporal_features = torch.cat([vision_features_t1, vision_features_t2], dim=-1)  # (B, 1024)
+        temporal_features = torch.cat([vision_features_t1, vision_features_t2], dim=-1)  # (B, 1536)
 
-        # Reduce to LLM hidden dim if needed
-        if temporal_features.shape[-1] != Config.LLM_HIDDEN_DIM:
-            temporal_features = self.projector(temporal_features)  # (B, 1024)
+        # Project to LLM hidden dim
+        # temporal_features: (B, 1536) -> (B, 1024)
+        temporal_features = self.projector(temporal_features)  # (B, 1024)
 
         # Tokenize captions
         caption_tokens = self.llm_tokenizer(

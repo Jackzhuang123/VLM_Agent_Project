@@ -1,6 +1,7 @@
 """
 Dataset module for loading Arrow format data from HuggingFace datasets
 Handles LEVIR-CC change detection dataset with bbox and caption
+Supports multiple data structures from Kaggle and local environments
 """
 import io
 from pathlib import Path
@@ -25,14 +26,25 @@ except ImportError:
 
 class LevirCCActionDataset(Dataset):
     """
-    LEVIR-CC change detection dataset adapted for action prediction
+    LEVIR-CC 变化检测数据集（适配动作预测任务）
 
-    Loads data from HuggingFace Arrow format (.arrow files)
-    Expected dataset structure:
-    - 'image' or 'A': Temporal image 1
-    - 'image2' or 'B': Temporal image 2
-    - 'caption': Change description text
-    - 'bbox': Bounding box [x1, y1, x2, y2] of change region
+    功能说明：
+        - 从多种格式加载数据（Arrow、原始图像、JSON 标注）
+        - 自动检测数据中的图像、文本和边界框字段
+        - 进行图像预处理和边界框转换
+        - 支持在多进程 DataLoader 中运行
+
+    支持的数据字段：
+        - 图像1: 'image', 'A', 'img', 'image1'
+        - 图像2: 'image2', 'B', 'img2', 'image_2'
+        - 文本: 'caption', 'text', 'description', 'label'
+        - 边界框: 'bbox', 'bboxes', 'bounding_box', 'box'
+
+    数据处理流程：
+        1. 加载并自动检测字段
+        2. 禁用 HuggingFace 自动解码（避免多进程缓存问题）
+        3. 图像预处理：Resize(224) → Normalize(CLIP)
+        4. 边界框转换：[x1,y1,x2,y2] → [cx,cy,scale]
     """
 
     def __init__(
@@ -43,13 +55,19 @@ class LevirCCActionDataset(Dataset):
         normalize_bbox: bool = True,
     ):
         """
-        Initialize LEVIR-CC dataset
+        初始化 LEVIR-CC 数据集
+
+        初始化步骤：
+        1. 验证 datasets 库可用性
+        2. 设置图像预处理流程
+        3. 禁用 HuggingFace 自动解码
+        4. 检测数据结构和字段名称
 
         Args:
-            dataset_split: HuggingFace dataset split (usually dataset['train'])
-            image_size: Target size for image resizing
-            max_text_length: Maximum length for tokenized text
-            normalize_bbox: Whether to normalize bbox to [0, 1] range
+            dataset_split: HuggingFace 数据集分割对象（通常为 dataset['train']）
+            image_size (int): 图像大小（默认 224，CLIP 要求）
+            max_text_length (int): 文本最大长度（默认 128）
+            normalize_bbox (bool): 是否归一化边界框到 [0, 1]（默认 True）
         """
         if not DATASETS_AVAILABLE:
             raise ImportError("datasets library is required. Install with: pip install datasets")
@@ -170,6 +188,9 @@ class LevirCCActionDataset(Dataset):
         print(f"  Image 2 key: {self.image2_key}")
         print(f"  Caption key: {self.caption_key}")
         print(f"  BBox key: {self.bbox_key}\n")
+
+        # 检查关键字段缺失并给出警告
+        self._check_critical_fields()
 
     @staticmethod
     def _detect_image_key(sample: Dict) -> str:
@@ -374,14 +395,89 @@ class LevirCCActionDataset(Dataset):
             return torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
 
 
+def load_captions_from_json(json_path: str) -> Dict[str, Dict]:
+    """
+    从 JSON 标注文件加载图像对应的标注
+
+    功能：
+        - 支持 LEVIR-CC 数据集的标注格式
+        - 处理多个嵌套数组的 JSON 文件
+        - 提取标注文本和变化标志
+
+    JSON 结构：
+        包含 'filename', 'sentences', 'changeflag' 字段的图像元数据列表
+        多个数组可以拼接在一个文件中
+
+    Args:
+        json_path (str): JSON 标注文件路径
+
+    Returns:
+        Dict[str, Dict]: 字典映射 {图像名称 -> {caption, changeflag}}
+
+    示例：
+        {
+            'train_000001.png': {
+                'caption': 'some building constructed...',
+                'changeflag': 1
+            }
+        }
+    """
+    import json
+
+    captions_dict = {}  # 存储标注字典
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            # 尝试加载为列表（如果是多个数组）
+            content = f.read().strip()
+
+            if content.startswith('['):
+                # 单个数组
+                data = json.loads(content)
+            else:
+                # 可能是多个数组拼接
+                import re
+                arrays = re.findall(r'\[.*?\](?=\s*(?:\[|$))', content, re.DOTALL)
+                data = []
+                for arr_str in arrays:
+                    data.extend(json.loads(arr_str))
+
+        for item in data:
+            if 'filename' in item and 'sentences' in item:
+                # 获取第一个句子作为标注
+                if item['sentences']:
+                    caption = item['sentences'][0].get('raw', 'A change has occurred.').strip()
+                    if caption.startswith(' '):
+                        caption = caption[1:]
+                else:
+                    caption = 'A change has occurred.'
+
+                # 使用 changeflag 来辅助标注
+                changeflag = item.get('changeflag', 1)
+
+                captions_dict[item['filename']] = {
+                    'caption': caption,
+                    'changeflag': changeflag,
+                }
+
+        print(f"✅ 从 JSON 加载了 {len(captions_dict)} 个标注")
+
+    except Exception as e:
+        print(f"⚠️  无法加载 JSON 标注: {e}")
+        print(f"   将使用默认标注")
+
+    return captions_dict
+
+
 def load_raw_levir_cc_dataset(dataset_path: str):
     """
     从原始LEVIR-CC文件结构或单个Arrow文件加载数据集
 
     支持的结构:
     1. 单个 .arrow 文件: LEVIR-CC/levir-cc-train.arrow
-    2. 图像目录结构: LEVIR-CC/images/train/A 和 B
-    3. 简化目录结构: LEVIR-CC/A 和 B
+    2. 图像目录结构: LEVIR-CC/images/train/A, B, val/A, B, test/A, B
+    3. 简化目录结构: LEVIR-CC/A, B
+    4. 带有 JSON 标注: 集成 LevirCCcaptions.json
 
     Args:
         dataset_path: 数据集根目录路径
@@ -395,6 +491,12 @@ def load_raw_levir_cc_dataset(dataset_path: str):
     print(f"\n🔄 尝试从原始结构加载数据集: {dataset_path}")
 
     dataset_path = Path(dataset_path)
+
+    # 首先尝试加载 JSON 标注文件
+    json_path = dataset_path / 'LevirCCcaptions.json'
+    captions_dict = {}
+    if json_path.exists():
+        captions_dict = load_captions_from_json(str(json_path))
 
     # 首先检查是否有 .arrow 文件
     arrow_files = list(dataset_path.glob('*.arrow'))
@@ -430,40 +532,52 @@ def load_raw_levir_cc_dataset(dataset_path: str):
     # 如果没有 Arrow 文件，尝试从图像目录加载
     print(f"🔄 查找图像目录结构...")
 
-    # 检查可能的目录结构
+    # 检查可能的目录结构（包括多个分割）
     possible_structures = [
-        # 结构1: LEVIR-CC/images/train/A, B
+        # 结构1: LEVIR-CC/images/train/A, B (+ val/test)
         {
-            'img_a': dataset_path / 'images' / 'train' / 'A',
-            'img_b': dataset_path / 'images' / 'train' / 'B',
+            'train_a': dataset_path / 'images' / 'train' / 'A',
+            'train_b': dataset_path / 'images' / 'train' / 'B',
+            'val_a': dataset_path / 'images' / 'val' / 'A',
+            'val_b': dataset_path / 'images' / 'val' / 'B',
+            'test_a': dataset_path / 'images' / 'test' / 'A',
+            'test_b': dataset_path / 'images' / 'test' / 'B',
         },
-        # 结构2: LEVIR-CC/A, B
+        # 结构2: LEVIR-CC/A, B (简化)
         {
-            'img_a': dataset_path / 'A',
-            'img_b': dataset_path / 'B',
+            'train_a': dataset_path / 'A',
+            'train_b': dataset_path / 'B',
         },
-        # 结构3: LEVIR-CC/train/A, B
+        # 结构3: LEVIR-CC/train/A, B (+ val/test)
         {
-            'img_a': dataset_path / 'train' / 'A',
-            'img_b': dataset_path / 'train' / 'B',
+            'train_a': dataset_path / 'train' / 'A',
+            'train_b': dataset_path / 'train' / 'B',
+            'val_a': dataset_path / 'val' / 'A',
+            'val_b': dataset_path / 'val' / 'B',
+            'test_a': dataset_path / 'test' / 'A',
+            'test_b': dataset_path / 'test' / 'B',
         },
     ]
 
     # 找到存在的结构
     valid_structure = None
     for structure in possible_structures:
-        if structure['img_a'].exists() and structure['img_b'].exists():
+        # 检查至少有 train 集
+        if structure['train_a'].exists() and structure['train_b'].exists():
             valid_structure = structure
             print(f"✅ 找到有效结构:")
-            print(f"   图像A目录: {structure['img_a']}")
-            print(f"   图像B目录: {structure['img_b']}")
+            print(f"   训练集A目录: {structure['train_a']}")
+            print(f"   训练集B目录: {structure['train_b']}")
+            if structure.get('val_a') and structure['val_a'].exists():
+                print(f"   验证集A目录: {structure['val_a']}")
+                print(f"   验证集B目录: {structure['val_b']}")
             break
 
     if valid_structure is None:
         # 列出实际存在的文件/目录
         print(f"\n📁 实际目录内容:")
         if dataset_path.exists():
-            for item in dataset_path.iterdir():
+            for item in sorted(dataset_path.iterdir()):
                 if item.is_dir():
                     print(f"   📁 {item.name}/")
                 else:
@@ -472,28 +586,56 @@ def load_raw_levir_cc_dataset(dataset_path: str):
         raise FileNotFoundError(
             f"无法在 {dataset_path} 中找到有效的LEVIR-CC数据结构。\n"
             f"预期结构:\n"
-            f"  - LEVIR-CC/*.arrow 文件\n"
-            f"  - LEVIR-CC/images/train/A 和 B\n"
-            f"  - LEVIR-CC/A 和 B"
+            f"  - 完整结构: LEVIR-CC/images/train/A, B (+ val/, test/)\n"
+            f"  - 简化结构: LEVIR-CC/A, B\n"
+            f"  - 另选项: LEVIR-CC/train/A, B (+ val/, test/)"
         )
 
-    # 获取所有图像文件
-    img_a_files = sorted(list(valid_structure['img_a'].glob('*.png')) +
-                        list(valid_structure['img_a'].glob('*.jpg')))
-    img_b_files = sorted(list(valid_structure['img_b'].glob('*.png')) +
-                        list(valid_structure['img_b'].glob('*.jpg')))
-
-    print(f"✅ 找到 {len(img_a_files)} 对图像")
-
-    # 构建数据集（使用默认标注）
+    # 加载所有分割
     dataset_list = []
-    for img_a_path, img_b_path in zip(img_a_files, img_b_files):
-        dataset_list.append({
-            'A': str(img_a_path),
-            'B': str(img_b_path),
-            'caption': 'A change has occurred in the remote sensing image.',
-            'bbox': [0, 0, 256, 256],  # 默认bbox，将在后续被归一化
-        })
+    splits = {
+        'train': ('train_a', 'train_b'),
+        'val': ('val_a', 'val_b'),
+        'test': ('test_a', 'test_b'),
+    }
+
+    for split_name, (key_a, key_b) in splits.items():
+        if key_a not in valid_structure or not valid_structure[key_a].exists():
+            if split_name != 'train':
+                print(f"⚠️  跳过 {split_name} 分割（目录不存在）")
+            continue
+
+        path_a = valid_structure[key_a]
+        path_b = valid_structure[key_b]
+
+        # 获取所有图像文件
+        img_a_files = sorted(list(path_a.glob('*.png')) +
+                            list(path_a.glob('*.jpg')))
+        img_b_files = sorted(list(path_b.glob('*.png')) +
+                            list(path_b.glob('*.jpg')))
+
+        print(f"✅ 找到 {len(img_a_files)} 对 {split_name} 集图像")
+
+        # 构建数据集
+        for img_a_path, img_b_path in zip(img_a_files, img_b_files):
+            img_a_name = img_a_path.name
+
+            # 尝试从 JSON 获取标注
+            caption = 'A change has occurred in the remote sensing image.'
+            changeflag = 1
+
+            if img_a_name in captions_dict:
+                caption = captions_dict[img_a_name]['caption']
+                changeflag = captions_dict[img_a_name]['changeflag']
+
+            dataset_list.append({
+                'A': str(img_a_path),
+                'B': str(img_b_path),
+                'caption': caption,
+                'changeflag': changeflag,
+                'split': split_name,
+                'bbox': [0, 0, 256, 256],  # 默认bbox，将在后续被归一化
+            })
 
     return dataset_list
 
@@ -506,6 +648,21 @@ def create_dataloaders(
 ):
     """
     Create train and validation dataloaders from LEVIR-CC dataset
+
+    支持多种数据集结构（按优先级顺序）：
+    1. 原始图像目录 + JSON 标注（推荐，当前数据集格式）
+       - images/train/A, B
+       - images/val/A, B
+       - images/test/A, B
+       - LevirCCcaptions.json
+    2. 单个 Arrow 文件（HuggingFace 格式）
+    3. Arrow 格式数据集（load_from_disk）
+
+    自动特性：
+    - 检测预定义的 train/val/test 分割
+    - 如果只有 train 集，自动随机分割为 train/val
+    - 加载 JSON 标注文件（如果存在）
+    - Kaggle 环境自动处理缓存目录
 
     Args:
         batch_size: Batch size for dataloaders
@@ -524,127 +681,213 @@ def create_dataloaders(
     print("="*60)
     print(f"数据集路径: {Config.DATASET_PATH}")
 
-    try:
-        # 首先尝试从Arrow格式加载
-        full_dataset = datasets.load_from_disk(Config.DATASET_PATH)
-        print(f"✅ 从Arrow格式加载成功")
-        print(f"   数据集结构: {full_dataset}")
-
-        # Get the appropriate split
-        if 'train' in full_dataset:
-            dataset_split = full_dataset['train']
-            print(f"✅ 使用 'train' 分割，共 {len(dataset_split)} 个样本")
-        else:
-            # If only one split exists, use it
-            dataset_split = full_dataset
-            print(f"⚠️  未找到 'train' 分割。使用整个数据集，共 {len(dataset_split)} 个样本")
-
-
-    except (FileNotFoundError, Exception) as e:
-        print(f"⚠️  Arrow格式加载失败: {e}")
-        print(f"🔄 尝试从原始文件结构加载...")
-
-        try:
-            # 从原始结构加载（可能返回 Dataset 或 list）
-            raw_data = load_raw_levir_cc_dataset(Config.DATASET_PATH)
-
-            # 检查返回类型
-            if isinstance(raw_data, datasets.Dataset):
-                # 已经是 Dataset 对象（从 Arrow 文件加载）
-                dataset_split = raw_data
-                print(f"✅ 从 Arrow 文件加载成功，共 {len(dataset_split)} 个样本")
-            else:
-                # 是列表（从图像目录加载）
-                # 转换为HuggingFace Dataset格式
-                dataset_dict = {
-                    'A': [item['A'] for item in raw_data],
-                    'B': [item['B'] for item in raw_data],
-                    'caption': [item['caption'] for item in raw_data],
-                    'bbox': [item['bbox'] for item in raw_data],
-                }
-
-                dataset_split = datasets.Dataset.from_dict(dataset_dict)
-                print(f"✅ 从图像目录加载成功，共 {len(dataset_split)} 个样本")
-
-        except Exception as raw_e:
-            print(f"❌ 原始结构加载也失败: {raw_e}")
-            import traceback
-            traceback.print_exc()
-            raise RuntimeError(
-                f"无法加载数据集。尝试了:\n"
-                f"1. Arrow格式 (load_from_disk): {e}\n"
-                f"2. 原始结构/单Arrow文件: {raw_e}\n\n"
-                f"请检查数据集路径和结构是否正确。"
-            )
-
-    # Create train/val split
-    # 注意：在 Kaggle 环境中，/kaggle/input/ 是只读的
-    # 我们需要设置 HF_DATASETS_CACHE 到可写目录
     import os
     import numpy as np
 
-    # 确保缓存目录指向可写位置
+    # 设置缓存目录到可写位置（Kaggle 环境中是必需的）
     cache_dir = os.path.join(Config.WORKING_DIR, '.cache')
     os.makedirs(cache_dir, exist_ok=True)
     os.environ['HF_DATASETS_CACHE'] = cache_dir
 
-    # 对于只读文件系统（Kaggle），使用手动分割而不是 HF 的 train_test_split
-    # 这避免了在输入目录中创建临时文件
-    print(f"🔄 正在分割数据集 (train: {1-test_split:.1%}, test: {test_split:.1%})...")
+    dataset_split = None
+    raw_data = None
 
-    n_samples = len(dataset_split)
-    indices = np.arange(n_samples)
+    # 优先级1：尝试从原始文件结构加载（当前数据集格式）
+    print(f"🔄 检测数据集格式...")
+    dataset_path = Path(Config.DATASET_PATH)
 
-    # 设置随机种子以保证重现性
-    np.random.seed(seed)
+    # 检查是否是原始图像目录结构
+    has_images_dir = (dataset_path / 'images' / 'train' / 'A').exists() or \
+                     (dataset_path / 'train' / 'A').exists() or \
+                     (dataset_path / 'A').exists()
 
-    # 随机打乱索引
-    np.random.shuffle(indices)
+    if has_images_dir:
+        print(f"✅ 检测到原始图像目录结构，优先使用此格式")
+        try:
+            raw_data = load_raw_levir_cc_dataset(Config.DATASET_PATH)
+            print(f"✅ 从原始图像目录加载成功，共 {len(raw_data)} 个样本")
+        except Exception as raw_e:
+            print(f"⚠️  原始结构加载失败: {raw_e}")
+            raw_data = None
 
-    # 分割
-    split_point = int(n_samples * (1 - test_split))
-    train_indices = indices[:split_point]
-    test_indices = indices[split_point:]
+    # 优先级2：如果原始结构不存在，尝试 Arrow 格式
+    if raw_data is None:
+        print(f"🔄 尝试加载 Arrow 格式...")
+        try:
+            full_dataset = datasets.load_from_disk(Config.DATASET_PATH)
+            print(f"✅ 从 Arrow 格式加载成功")
+            print(f"   数据集结构: {full_dataset}")
 
-    # 转换为列表并排序（使数据更连贯）
-    train_indices = sorted(train_indices.tolist())
-    test_indices = sorted(test_indices.tolist())
+            # Get the appropriate split
+            if 'train' in full_dataset:
+                dataset_split = full_dataset['train']
+                print(f"✅ 使用 'train' 分割，共 {len(dataset_split)} 个样本")
+            else:
+                # If only one split exists, use it
+                dataset_split = full_dataset
+                print(f"⚠️  未找到 'train' 分割。使用整个数据集，共 {len(dataset_split)} 个样本")
 
-    try:
-        # 尝试使用 select 方法（在可写系统中可能会缓存）
-        split_dataset = {
-            'train': dataset_split.select(train_indices),
-            'test': dataset_split.select(test_indices)
-        }
-    except OSError as e:
-        if "Read-only file system" in str(e) or "No space left" in str(e):
-            print(f"⚠️  数据集操作中遇到文件系统错误，使用直接索引访问...")
-            # 降级方案：创建一个包装对象，在访问时进行过滤
-            class IndexedDataset:
-                def __init__(self, dataset, indices):
-                    self.dataset = dataset
-                    self.indices = indices
-                    self._len = len(indices)
+        except (FileNotFoundError, Exception) as e:
+            print(f"⚠️  Arrow 格式加载失败: {e}")
 
-                def __len__(self):
-                    return self._len
+            # 优先级3：尝试单个 Arrow 文件或其他格式
+            print(f"🔄 尝试加载单个 Arrow 文件...")
+            try:
+                raw_data = load_raw_levir_cc_dataset(Config.DATASET_PATH)
 
-                def __getitem__(self, idx):
-                    return self.dataset[self.indices[idx]]
+                # 检查返回类型
+                if isinstance(raw_data, datasets.Dataset):
+                    dataset_split = raw_data
+                    print(f"✅ 从 Arrow 文件加载成功，共 {len(dataset_split)} 个样本")
+                else:
+                    print(f"✅ 从其他格式加载成功，共 {len(raw_data)} 个样本")
 
-                def train_test_split(self, *args, **kwargs):
-                    # 防止再次调用 train_test_split
-                    raise RuntimeError("Cannot split an already indexed dataset")
+            except Exception as raw_e:
+                print(f"❌ 所有格式加载都失败")
+                import traceback
+                traceback.print_exc()
+                raise RuntimeError(
+                    f"无法加载数据集。尝试了以下格式:\n"
+                    f"1. 原始图像目录 (images/train/A,B + val + test): 路径不存在\n"
+                    f"2. Arrow 格式 (load_from_disk): {e}\n"
+                    f"3. 单个 Arrow 文件: {raw_e}\n\n"
+                    f"请检查数据集路径和结构是否正确。"
+                    f"预期格式:\n"
+                    f"  - {dataset_path}/images/train/{{A,B}}\n"
+                    f"  - {dataset_path}/images/val/{{A,B}}\n"
+                    f"  - {dataset_path}/images/test/{{A,B}}"
+                )
+
+    # 处理从列表加载的情况
+    if raw_data is not None and dataset_split is None:
+        # 从列表转换为 HuggingFace Dataset
+        # 按 split 分组
+        train_data = [item for item in raw_data if item.get('split', 'train') == 'train']
+        val_data = [item for item in raw_data if item.get('split', 'train') == 'val']
+        test_data = [item for item in raw_data if item.get('split', 'train') == 'test']
+
+        print(f"\n📊 数据集分割统计:")
+        print(f"   训练集: {len(train_data)} 样本")
+        print(f"   验证集: {len(val_data)} 样本")
+        print(f"   测试集: {len(test_data)} 样本")
+
+        # 如果有预定义的验证集，直接使用
+        if len(val_data) > 0:
+            print(f"🔄 使用预定义的训练/验证分割...")
+            dataset_dict_train = {
+                'A': [item['A'] for item in train_data],
+                'B': [item['B'] for item in train_data],
+                'caption': [item['caption'] for item in train_data],
+                'bbox': [item['bbox'] for item in train_data],
+            }
+            dataset_dict_val = {
+                'A': [item['A'] for item in val_data],
+                'B': [item['B'] for item in val_data],
+                'caption': [item['caption'] for item in val_data],
+                'bbox': [item['bbox'] for item in val_data],
+            }
 
             split_dataset = {
-                'train': IndexedDataset(dataset_split, train_indices),
-                'test': IndexedDataset(dataset_split, test_indices)
+                'train': datasets.Dataset.from_dict(dataset_dict_train),
+                'test': datasets.Dataset.from_dict(dataset_dict_val),
             }
         else:
-            raise
+            # 使用所有数据并随机分割
+            print(f"🔄 正在随机分割数据集 (train: {1-test_split:.1%}, val: {test_split:.1%})...")
 
-    print(f"✅ 数据集分割完成: 训练集 {len(split_dataset['train'])} 个样本，测试集 {len(split_dataset['test'])} 个样本")
+            dataset_dict = {
+                'A': [item['A'] for item in train_data],
+                'B': [item['B'] for item in train_data],
+                'caption': [item['caption'] for item in train_data],
+                'bbox': [item['bbox'] for item in train_data],
+            }
 
+            dataset_split = datasets.Dataset.from_dict(dataset_dict)
+
+            n_samples = len(dataset_split)
+            indices = np.arange(n_samples)
+            np.random.seed(seed)
+            np.random.shuffle(indices)
+
+            split_point = int(n_samples * (1 - test_split))
+            train_indices = sorted(indices[:split_point].tolist())
+            test_indices = sorted(indices[split_point:].tolist())
+
+            try:
+                split_dataset = {
+                    'train': dataset_split.select(train_indices),
+                    'test': dataset_split.select(test_indices)
+                }
+            except OSError as e:
+                if "Read-only file system" in str(e) or "No space left" in str(e):
+                    print(f"⚠️  数据集操作中遇到文件系统错误，使用直接索引访问...")
+
+                    class IndexedDataset:
+                        def __init__(self, dataset, indices):
+                            self.dataset = dataset
+                            self.indices = indices
+                            self._len = len(indices)
+
+                        def __len__(self):
+                            return self._len
+
+                        def __getitem__(self, idx):
+                            return self.dataset[self.indices[idx]]
+
+                    split_dataset = {
+                        'train': IndexedDataset(dataset_split, train_indices),
+                        'test': IndexedDataset(dataset_split, test_indices)
+                    }
+                else:
+                    raise
+    else:
+        # 从 HuggingFace Dataset 加载
+        if dataset_split is None:
+            raise RuntimeError("无法加载数据集")
+
+        # 对于 HuggingFace Dataset，进行随机分割
+        print(f"🔄 正在分割 HuggingFace Dataset (train: {1-test_split:.1%}, val: {test_split:.1%})...")
+
+        n_samples = len(dataset_split)
+        indices = np.arange(n_samples)
+        np.random.seed(seed)
+        np.random.shuffle(indices)
+
+        split_point = int(n_samples * (1 - test_split))
+        train_indices = sorted(indices[:split_point].tolist())
+        test_indices = sorted(indices[split_point:].tolist())
+
+        try:
+            split_dataset = {
+                'train': dataset_split.select(train_indices),
+                'test': dataset_split.select(test_indices)
+            }
+        except OSError as e:
+            if "Read-only file system" in str(e) or "No space left" in str(e):
+                print(f"⚠️  数据集操作中遇到文件系统错误，使用直接索引访问...")
+
+                class IndexedDataset:
+                    def __init__(self, dataset, indices):
+                        self.dataset = dataset
+                        self.indices = indices
+                        self._len = len(indices)
+
+                    def __len__(self):
+                        return self._len
+
+                    def __getitem__(self, idx):
+                        return self.dataset[self.indices[idx]]
+
+                split_dataset = {
+                    'train': IndexedDataset(dataset_split, train_indices),
+                    'test': IndexedDataset(dataset_split, test_indices)
+                }
+            else:
+                raise
+
+    print(f"✅ 数据集分割完成: 训练集 {len(split_dataset['train'])} 个样本，验证集 {len(split_dataset['test'])} 个样本")
+
+    # 创建 PyTorch Dataset
     train_dataset = LevirCCActionDataset(
         split_dataset['train'],
         image_size=Config.IMAGE_SIZE,
@@ -659,7 +902,7 @@ def create_dataloaders(
         normalize_bbox=Config.BBOX_NORMALIZE,
     )
 
-    # Create dataloaders
+    # 创建 DataLoaders
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -678,9 +921,9 @@ def create_dataloaders(
         drop_last=False,
     )
 
-    print(f"\n✅ Dataloaders created:")
-    print(f"   Train: {len(train_loader)} batches ({len(train_dataset)} samples)")
-    print(f"   Val: {len(val_loader)} batches ({len(val_dataset)} samples)")
+    print(f"\n✅ DataLoaders 创建成功:")
+    print(f"   训练集: {len(train_loader)} 个batch ({len(train_dataset)} 样本)")
+    print(f"   验证集: {len(val_loader)} 个batch ({len(val_dataset)} 样本)")
     print("="*60 + "\n")
 
     return train_loader, val_loader

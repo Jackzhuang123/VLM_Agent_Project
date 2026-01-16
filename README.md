@@ -20,9 +20,10 @@ VLM-VLA Agent 是一个先进的多模态 AI 系统，结合了视觉语言模�
 - ✅ **完全离线**：所有模型本地加载，无需联网
 - ✅ **自适应环境**：自动识别 Kaggle 或本地环境
 - ✅ **高效微调**：LoRA + 4位量化
-- ✅ **灵活数据处理**：自动检测数据结构
-- ✅ **生产级代码**：完整的错误处理和日志
+- ✅ **灵活数据处理**：支持 Arrow/原始图像目录/JSON标注自动检测
+- ✅ **生产级代码**：完整的错误处理、日志记录和训练容错
 - ✅ **一键部署**：Kaggle 部署指南
+- ✅ **多分割支持**：自动检测 train/val/test 数据集分割
 
 ---
 
@@ -202,16 +203,33 @@ LORA_R = 8                   # LoRA 秩
 LORA_ALPHA = 16              # 缩放因子
 LORA_DROPOUT = 0.05          # Dropout 率
 
+# 模型维度设置（已优化）
+VISION_OUTPUT_DIM = 512      # CLIP 输出维度
+LLM_HIDDEN_DIM = 1024        # LLM 隐藏维度
+
 # 数据设置
 IMAGE_SIZE = 224             # CLIP 输入尺寸
 MAX_TEXT_LENGTH = 128        # 文本最大长度
 ```
 
-### 路径配置
+### 路径配置与数据支持
 
-系统自动检测环境：
-- **Kaggle**：使用 `/kaggle/input/` 路径
-- **本地**：使用项目根目录下的 `data/` 和 `models/` 目录
+系统自动检测环境和数据格式：
+
+**Kaggle 环境**：
+- 使用 `/kaggle/input/` 路径
+- 自动尝试多个可能的数据集路径
+
+**本地开发**：
+- 使用项目根目录下的 `data/Levir-CC-dataset`
+- 支持的数据格式：
+  - Arrow 格式：`data/Levir-CC-dataset/levir-cc-train.arrow`
+  - 原始图像 + JSON：`data/Levir-CC-dataset/images/{train|val|test}/{A|B}` + `LevirCCcaptions.json`
+  - 简化结构：`data/Levir-CC-dataset/{train|val|test}/{A|B}`
+
+**JSON 标注支持**：
+- 自动加载 `LevirCCcaptions.json` 作为图像标注
+- 支持多数组拼接格式
 
 ---
 

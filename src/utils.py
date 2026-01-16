@@ -1,5 +1,21 @@
 """
-VLM-VLA Agent 训练和推理的工具函数
+VLM-VLA Agent 训练和推理的工具函数库
+
+包含以下功能模块：
+    1. 随机种子：设置可复现性的种子
+    2. 设备管理：GPU/CPU 设备检测和选择
+    3. 模型统计：参数计数和摘要打印
+    4. 检查点管理：加载、保存和清理检查点
+    5. 内存监控：GPU 内存使用情况跟踪
+    6. 路径验证：检查必需的文件和目录
+    7. 日志记录：设置和管理日志输出
+    8. 性能计算：统计指标平均值计算
+
+使用示例：
+    >>> from src.utils import set_seed, get_device, print_model_summary
+    >>> set_seed(42)
+    >>> device = get_device()
+    >>> print_model_summary(model)
 """
 
 import json
@@ -325,26 +341,52 @@ def validate_paths(paths: Dict[str, str]) -> bool:
 
 
 class AverageMeter:
-    """计算和存储平均值和当前值"""
+    """
+    计算和存储指标的当前值和平均值
+
+    用于训练过程中追踪指标，例如损失、准确率等。
+
+    示例：
+        >>> meter = AverageMeter("损失", fmt=":6.4f")
+        >>> for batch_loss in losses:
+        ...     meter.update(batch_loss, n=batch_size)
+        >>> print(meter)  # 输出: 损失  1.2345 (1.2000)
+    """
 
     def __init__(self, name: str, fmt: str = ":.4f"):
-        self.name = name
-        self.fmt = fmt
-        self.reset()
+        """
+        初始化 AverageMeter
+
+        Args:
+            name (str): 指标名称（用于打印）
+            fmt (str): 数字格式化字符串（默认 4 位小数）
+        """
+        self.name = name  # 指标名称
+        self.fmt = fmt  # 格式化格式
+        self.reset()  # 初始化计数器
 
     def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
+        """重置所有计数器"""
+        self.val = 0  # 当前值
+        self.avg = 0  # 平均值
+        self.sum = 0  # 累积和
+        self.count = 0  # 样本计数
 
     def update(self, val, n: int = 1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
+        """
+        使用新值更新平均值
+
+        Args:
+            val (float): 新的值
+            n (int): 值的数量（用于加权平均）
+        """
+        self.val = val  # 更新当前值
+        self.sum += val * n  # 累加加权值
+        self.count += n  # 更新计数
+        self.avg = self.sum / self.count if self.count > 0 else 0  # 计算平均值
 
     def __str__(self):
+        """返回格式化的字符串表示"""
         fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
         return fmtstr.format(name=self.name, val=self.val, avg=self.avg)
 

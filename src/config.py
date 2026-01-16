@@ -1,6 +1,13 @@
 """
 VLM-VLA Agent 配置模块
 自动检测 Kaggle 环境并设置适当的路径
+
+功能说明：
+    - 自动识别运行环境（Kaggle 或本地开发）
+    - 设置相应的数据集和模型路径
+    - 定义所有训练超参数
+    - 支持混合精度训练和 4 位量化
+    - 支持 LoRA 微调配置
 """
 
 import os
@@ -10,15 +17,36 @@ from pathlib import Path
 class Config:
     """
     VLM-VLA Agent 配置类
-    自动检测 Kaggle 环境并提供适当的路径
+
+    该类包含所有与训练相关的配置项：
+    - 环境检测：自动识别 Kaggle 或本地环境
+    - 路径配置：数据集、模型、输出目录
+    - 超参数：学习率、批次大小等
+    - 模型参数：CLIP、LLM、LoRA 配置
     """
 
     # 检测是否在 Kaggle 环境中运行
+    # Kaggle 环境下，/kaggle/input 目录存在
     IS_KAGGLE = os.path.exists("/kaggle/input")
 
     if IS_KAGGLE:
         # Kaggle 环境路径
-        DATASET_PATH = "/kaggle/input/levir-cc-dataset/LEVIR-CC"
+        # 支持多种可能的数据集路径结构
+        DATASET_PATH = "/kaggle/input/levir-cc-dataset"
+        # 如果上面路径不存在，尝试其他可能
+        if not os.path.exists(DATASET_PATH):
+            # 检查其他可能的路径
+            possible_paths = [
+                "/kaggle/input/levir-cc-dataset/LEVIR-CC",
+                "/kaggle/input/levir-cc/LEVIR-CC",
+                "/kaggle/input/levir-cc-dataset",
+                "/kaggle/input/levir-cc",
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    DATASET_PATH = path
+                    break
+
         CLIP_PATH = "/kaggle/input/model-data-set/models/clip-vit-b32"
         LLM_PATH = "/kaggle/input/model-data-set/models/qwen2.5-0.5b"
         OUTPUT_DIR = "/kaggle/working/output"
@@ -26,7 +54,7 @@ class Config:
     else:
         # 本地开发路径
         PROJECT_ROOT = Path(__file__).parent.parent
-        DATASET_PATH = str(PROJECT_ROOT / "data")
+        DATASET_PATH = str(PROJECT_ROOT / "data" / "Levir-CC-dataset")
         CLIP_PATH = str(PROJECT_ROOT / "models" / "clip-vit-b32")
         LLM_PATH = str(PROJECT_ROOT / "models" / "qwen2.5-0.5b")
         OUTPUT_DIR = str(PROJECT_ROOT / "output")
