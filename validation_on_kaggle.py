@@ -253,7 +253,7 @@ def load_validation_data():
                             'image_t1': img_a_tensor,
                             'image_t2': img_b_tensor,
                             'caption': f"Change detection for {sample['sample_id']}",
-                            'action_vector': torch.zeros(4),  # 占位符
+                            'action_vector': torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32),  # [cx, cy, scale]
                             'sample_id': sample['sample_id']
                         }
                     except Exception as e:
