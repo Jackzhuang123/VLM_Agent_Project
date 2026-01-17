@@ -100,31 +100,167 @@ def load_validation_data():
     """
     加载验证数据
 
-    支持两种数据结构：
-    1. Arrow 格式（通过 datasets 库）
-    2. 图像目录 + JSON 标注（本地结构）
+    支持多种数据结构：
+    1. 图像目录结构：images/test/, images/train/, images/val/
+    2. Arrow 格式（通过 datasets 库）
 
     优先级:
-    1. /kaggle/input/levir-cc-dataset (Kaggle)
+    1. /kaggle/input/levir-cc-dataset (Kaggle - 图像目录)
     2. Config.DATASET_PATH (本地配置)
     """
     print("\n" + "="*60)
     print("加载验证数据")
     print("="*60)
 
+    # 首先检测数据集位置
+    if Path("/kaggle/input/levir-cc-dataset").exists():
+        dataset_path = "/kaggle/input/levir-cc-dataset"
+        print(f"✅ 检测到 Kaggle 环境，使用数据集: {dataset_path}")
+    else:
+        dataset_path = Config.DATASET_PATH
+        print(f"📍 使用本地数据集路径: {dataset_path}")
+
+    # 检查是否是图像目录结构
+    images_dir = Path(dataset_path) / "images"
+    if images_dir.exists() and images_dir.is_dir():
+        print(f"📸 检测到图像目录结构: {images_dir}")
+
+        # 优先级: test > val > validation > train
+        split_order = ["test", "val", "validation", "train"]
+        split_path = None
+
+        for split_name in split_order:
+            candidate_path = images_dir / split_name
+            if candidate_path.exists() and candidate_path.is_dir():
+                # 检查目录中是否有子文件夹（A, B）
+                subdirs = list(candidate_path.glob("*/"))
+                if subdirs:
+                    split_path = candidate_path
+                    print(f"✅ 找到 '{split_name}' 分割，包含 {len(subdirs)} 个样本集合")
+                    break
+
+        if split_path is None:
+            print(f"❌ 未找到有效的测试分割")
+            return None
+
+        # 加载图像目录数据
+        try:
+            from PIL import Image
+
+            # 构建数据集 - 使用 os.scandir 代替 glob（更高效）
+            samples = []
+
+            # 使用 os.scandir 进行高效的目录遍历
+            sample_dirs = []
+            try:
+                with os.scandir(split_path) as entries:
+                    for entry in entries:
+                        if entry.is_dir(follow_symlinks=False):
+                            sample_dirs.append(entry.path)
+            except OSError as e:
+                print(f"⚠️  目录遍历失败: {e}")
+                return None
+
+            sample_dirs.sort()  # 排序以保证一致性
+
+            for sample_dir_path in sample_dirs:
+                sample_dir_name = os.path.basename(sample_dir_path)
+
+                # 高效查找 A 和 B 图像 - 只扫描一次
+                img_a_path = None
+                img_b_path = None
+                img_files = []
+
+                try:
+                    with os.scandir(sample_dir_path) as entries:
+                        for entry in entries:
+                            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith('.png'):
+                                file_lower = entry.name.lower()
+                                img_files.append((entry.path, file_lower))
+
+                                # 快速检查 A/B 标记
+                                if 'a' in file_lower and img_a_path is None:
+                                    img_a_path = entry.path
+                                elif 'b' in file_lower and img_b_path is None:
+                                    img_b_path = entry.path
+                except OSError:
+                    continue
+
+                # 如果没有明确的 A/B，按字母顺序取前两张
+                if img_a_path is None or img_b_path is None:
+                    if len(img_files) >= 2:
+                        img_files.sort(key=lambda x: x[0])  # 按路径排序
+                        if img_a_path is None:
+                            img_a_path = img_files[0][0]
+                        if img_b_path is None:
+                            img_b_path = img_files[1][0]
+
+                if img_a_path and img_b_path:
+                    samples.append({
+                        'image_a': img_a_path,
+                        'image_b': img_b_path,
+                        'sample_id': sample_dir_name
+                    })
+
+            if not samples:
+                print(f"❌ 未找到有效的图像对")
+                return None
+
+            print(f"✅ 加载了 {len(samples)} 个图像对")
+
+            # 创建简单的 Dataset 类来处理图像
+            class ImagePairDataset:
+                def __init__(self, samples, image_size=224):
+                    from torchvision import transforms
+                    self.samples = samples
+                    self.image_size = image_size
+
+                    # 图像预处理管道（与 LevirCCActionDataset 一致）
+                    self.image_transform = transforms.Compose([
+                        transforms.Resize((image_size, image_size)),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.48145466, 0.4578275, 0.40821073],  # CLIP normalization
+                            std=[0.26862954, 0.26130258, 0.27577711]
+                        )
+                    ])
+
+                def __len__(self):
+                    return len(self.samples)
+
+                def __getitem__(self, idx):
+                    sample = self.samples[idx]
+                    try:
+                        from PIL import Image
+
+                        # 加载和转换图像
+                        img_a = Image.open(sample['image_a']).convert('RGB')
+                        img_b = Image.open(sample['image_b']).convert('RGB')
+
+                        # 应用预处理
+                        img_a_tensor = self.image_transform(img_a)
+                        img_b_tensor = self.image_transform(img_b)
+
+                        return {
+                            'image_t1': img_a_tensor,
+                            'image_t2': img_b_tensor,
+                            'caption': f"Change detection for {sample['sample_id']}",
+                            'action_vector': torch.zeros(4),  # 占位符
+                            'sample_id': sample['sample_id']
+                        }
+                    except Exception as e:
+                        print(f"❌ 加载样本 {sample['sample_id']} 失败: {e}")
+                        raise
+
+            return ImagePairDataset(samples, image_size=224)
+
+        except Exception as e:
+            print(f"❌ 从图像目录加载失败: {e}")
+            return None
+
+    # 尝试从 Arrow 格式加载
     try:
         import datasets
-
-        # Kaggle 数据集的标准位置
-        kaggle_dataset_path = "/kaggle/input/levir-cc-dataset"
-
-        # 尝试从 Arrow 格式加载
-        if Path(kaggle_dataset_path).exists():
-            dataset_path = kaggle_dataset_path
-            print(f"✅ 检测到 Kaggle 环境，使用数据集: {dataset_path}")
-        else:
-            dataset_path = Config.DATASET_PATH
-            print(f"📍 使用本地数据集路径: {dataset_path}")
 
         # 尝试多个可能的路径
         possible_paths = [
@@ -137,7 +273,7 @@ def load_validation_data():
         for path in possible_paths:
             try:
                 if os.path.exists(path):
-                    print(f"🔍 尝试从 {path} 加载数据...")
+                    print(f"🔍 尝试从 {path} 加载 Arrow 格式数据...")
                     loaded_dataset = datasets.load_from_disk(path)
                     print(f"✅ 成功从 {path} 加载数据")
                     break
@@ -146,7 +282,7 @@ def load_validation_data():
                 continue
 
         if loaded_dataset is None:
-            raise Exception("无法加载数据集")
+            raise Exception("无法加载 Arrow 格式数据集")
 
         # 获取验证集
         # 优先级: test > validation > val > 其他
@@ -173,10 +309,23 @@ def load_validation_data():
 
     except Exception as e:
         print(f"❌ 从 Arrow 格式加载失败: {e}")
-        print("⚠️  尝试从图像目录加载...")
-
-        # 如果 Arrow 加载失败，返回 None，后续可以手动处理
         return None
+
+
+def collate_fn_custom(batch):
+    """自定义 collate 函数，处理字符串和张量的混合数据"""
+    batch_dict = {
+        'image_t1': torch.stack([item['image_t1'] for item in batch]),
+        'image_t2': torch.stack([item['image_t2'] for item in batch]),
+        'caption': [item['caption'] for item in batch],
+        'action_vector': torch.stack([item['action_vector'] for item in batch]),
+    }
+
+    # 如果有其他字段（如 sample_id），也添加进去
+    if 'sample_id' in batch[0]:
+        batch_dict['sample_id'] = [item['sample_id'] for item in batch]
+
+    return batch_dict
 
 
 def create_validation_dataloader(val_dataset, batch_size=4, num_workers=4):
@@ -193,7 +342,8 @@ def create_validation_dataloader(val_dataset, batch_size=4, num_workers=4):
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=False,
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
+        collate_fn=collate_fn_custom
     )
 
     print(f"✅ 数据加载器创建完成，共 {len(val_dataloader)} 个批次")
@@ -270,10 +420,11 @@ def evaluate_model(
                 if visualize and len(sample_data) < save_samples:
                     batch_size = images_t1.shape[0]
                     for i in range(min(batch_size, save_samples - len(sample_data))):
+                        caption = captions[i] if isinstance(captions, list) else str(captions[i])
                         sample_data.append({
                             'image_t1': images_t1[i].cpu().numpy(),
                             'image_t2': images_t2[i].cpu().numpy(),
-                            'caption': captions[i] if isinstance(captions, list) else captions[i].item(),
+                            'caption': caption,
                             'prediction': predictions[i],
                             'target': targets[i],
                             'loss': np.abs(predictions[i] - targets[i]).mean()
