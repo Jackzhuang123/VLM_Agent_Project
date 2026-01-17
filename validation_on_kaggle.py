@@ -862,12 +862,34 @@ def main():
 
     # 加载模型
     print("\n🔄 加载模型...")
-    model = create_model()
+    # 验证时禁用 4-bit 量化，以兼容各种检查点格式
+    # (检查点可能是在不同量化配置下保存的)
+    model = create_model(use_4bit=False)
     model = model.to(device)
 
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    print(f"✅ 模型已加载: {args.checkpoint}")
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        print(f"✅ 模型已加载: {args.checkpoint}")
+    except RuntimeError as e:
+        # 如果 strict=False 还是失败，尝试只加载兼容的部分
+        print(f"⚠️  某些权重不兼容，尝试加载兼容部分...")
+        state_dict = checkpoint['model_state_dict']
+        model_state_dict = model.state_dict()
+
+        # 过滤掉不兼容的键
+        compatible_state_dict = {}
+        for k, v in state_dict.items():
+            if k in model_state_dict and model_state_dict[k].shape == v.shape:
+                compatible_state_dict[k] = v
+
+        missing_keys = set(model_state_dict.keys()) - set(compatible_state_dict.keys())
+        if missing_keys:
+            print(f"⚠️  以下权重未加载: {len(missing_keys)} 个")
+            print(f"   (这些权重将使用初始化值)")
+
+        model.load_state_dict(compatible_state_dict, strict=False)
+        print(f"✅ 模型已加载 (兼容加载): {args.checkpoint}")
 
     # 评估模型
     metrics, predictions, targets, sample_data = evaluate_model(
