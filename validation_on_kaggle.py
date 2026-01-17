@@ -155,66 +155,123 @@ def load_validation_data():
         try:
             from PIL import Image
 
-            # 构建数据集 - 使用 os.scandir 代替 glob（更高效）
-            samples = []
+            # 检查是否是 A/B 目录结构（2000+ 图片情况）
+            a_dir = split_path / "A"
+            b_dir = split_path / "B"
 
-            # 使用 os.scandir 进行高效的目录遍历
-            sample_dirs = []
-            try:
-                with os.scandir(split_path) as entries:
-                    for entry in entries:
-                        if entry.is_dir(follow_symlinks=False):
-                            sample_dirs.append(entry.path)
-            except OSError as e:
-                print(f"⚠️  目录遍历失败: {e}")
-                return None
+            if a_dir.exists() and b_dir.exists():
+                # ✅ 新的 A/B 目录结构
+                print(f"📂 检测到 A/B 目录结构: {split_path}/A 和 {split_path}/B")
 
-            sample_dirs.sort()  # 排序以保证一致性
-
-            for sample_dir_path in sample_dirs:
-                sample_dir_name = os.path.basename(sample_dir_path)
-
-                # 高效查找 A 和 B 图像 - 只扫描一次
-                img_a_path = None
-                img_b_path = None
-                img_files = []
-
+                # 加载 A 目录中的所有图片
+                a_images = []
                 try:
-                    with os.scandir(sample_dir_path) as entries:
+                    with os.scandir(a_dir) as entries:
                         for entry in entries:
-                            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith('.png'):
-                                file_lower = entry.name.lower()
-                                img_files.append((entry.path, file_lower))
+                            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                a_images.append((entry.path, entry.name))
+                except OSError as e:
+                    print(f"⚠️  读取 A 目录失败: {e}")
+                    return None
 
-                                # 快速检查 A/B 标记
-                                if 'a' in file_lower and img_a_path is None:
-                                    img_a_path = entry.path
-                                elif 'b' in file_lower and img_b_path is None:
-                                    img_b_path = entry.path
-                except OSError:
-                    continue
+                # 加载 B 目录中的所有图片
+                b_images = []
+                try:
+                    with os.scandir(b_dir) as entries:
+                        for entry in entries:
+                            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                b_images.append((entry.path, entry.name))
+                except OSError as e:
+                    print(f"⚠️  读取 B 目录失败: {e}")
+                    return None
 
-                # 如果没有明确的 A/B，按字母顺序取前两张
-                if img_a_path is None or img_b_path is None:
-                    if len(img_files) >= 2:
-                        img_files.sort(key=lambda x: x[0])  # 按路径排序
-                        if img_a_path is None:
-                            img_a_path = img_files[0][0]
-                        if img_b_path is None:
-                            img_b_path = img_files[1][0]
+                # 排序以保证一致性
+                a_images.sort(key=lambda x: x[1])
+                b_images.sort(key=lambda x: x[1])
 
-                if img_a_path and img_b_path:
+                # 创建配对：按照相同的索引配对
+                samples = []
+                num_pairs = min(len(a_images), len(b_images))
+
+                for idx in range(num_pairs):
                     samples.append({
-                        'image_a': img_a_path,
-                        'image_b': img_b_path,
-                        'sample_id': sample_dir_name
+                        'image_a': a_images[idx][0],
+                        'image_b': b_images[idx][0],
+                        'sample_id': f"{a_images[idx][1][:20]}_{b_images[idx][1][:20]}"  # 使用文件名作为 ID
                     })
 
-            if not samples:
-                print(f"❌ 未找到有效的图像对")
-                return None
+                if not samples:
+                    print(f"❌ 未找到有效的图像对")
+                    return None
 
-            print(f"✅ 加载了 {len(samples)} 个图像对")
+                print(f"✅ A 目录找到 {len(a_images)} 张图片")
+                print(f"✅ B 目录找到 {len(b_images)} 张图片")
+                print(f"✅ 创建了 {len(samples)} 个图像对")
+
+            else:
+                # ⚠️ 原始的样本文件夹结构
+                print(f"📂 使用样本文件夹结构: {split_path}")
+
+                # 构建数据集 - 使用 os.scandir 代替 glob（更高效）
+                samples = []
+
+                # 使用 os.scandir 进行高效的目录遍历
+                sample_dirs = []
+                try:
+                    with os.scandir(split_path) as entries:
+                        for entry in entries:
+                            if entry.is_dir(follow_symlinks=False):
+                                sample_dirs.append(entry.path)
+                except OSError as e:
+                    print(f"⚠️  目录遍历失败: {e}")
+                    return None
+
+                sample_dirs.sort()  # 排序以保证一致性
+
+                for sample_dir_path in sample_dirs:
+                    sample_dir_name = os.path.basename(sample_dir_path)
+
+                    # 高效查找 A 和 B 图像 - 只扫描一次
+                    img_a_path = None
+                    img_b_path = None
+                    img_files = []
+
+                    try:
+                        with os.scandir(sample_dir_path) as entries:
+                            for entry in entries:
+                                if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                    file_lower = entry.name.lower()
+                                    img_files.append((entry.path, file_lower))
+
+                                    # 快速检查 A/B 标记
+                                    if 'a' in file_lower and img_a_path is None:
+                                        img_a_path = entry.path
+                                    elif 'b' in file_lower and img_b_path is None:
+                                        img_b_path = entry.path
+                    except OSError:
+                        continue
+
+                    # 如果没有明确的 A/B，按字母顺序取前两张
+                    if img_a_path is None or img_b_path is None:
+                        if len(img_files) >= 2:
+                            img_files.sort(key=lambda x: x[0])  # 按路径排序
+                            if img_a_path is None:
+                                img_a_path = img_files[0][0]
+                            if img_b_path is None:
+                                img_b_path = img_files[1][0]
+
+                    if img_a_path and img_b_path:
+                        samples.append({
+                            'image_a': img_a_path,
+                            'image_b': img_b_path,
+                            'sample_id': sample_dir_name
+                        })
+
+                if not samples:
+                    print(f"❌ 未找到有效的图像对")
+                    return None
+
+                print(f"✅ 加载了 {len(samples)} 个图像对")
 
             # 创建简单的 Dataset 类来处理图像
             class ImagePairDataset:
