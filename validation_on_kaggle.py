@@ -87,16 +87,20 @@ def load_validation_data():
             raise Exception("无法加载数据集")
 
         # 获取验证集
-        if "validation" in loaded_dataset:
+        # 优先级: test > validation > val > 其他
+        if "test" in loaded_dataset:
+            val_dataset = loaded_dataset["test"]
+            print(f"✅ 找到 'test' 分割，包含 {len(val_dataset)} 个样本")
+        elif "validation" in loaded_dataset:
             val_dataset = loaded_dataset["validation"]
             print(f"✅ 找到 'validation' 分割，包含 {len(val_dataset)} 个样本")
         elif "val" in loaded_dataset:
             val_dataset = loaded_dataset["val"]
             print(f"✅ 找到 'val' 分割，包含 {len(val_dataset)} 个样本")
         else:
-            # 如果没有特定的验证集，使用测试集或全部数据
+            # 如果没有特定的验证集，使用其他可用分割
             available_splits = list(loaded_dataset.keys())
-            print(f"⚠️  没有找到 validation 或 val 分割")
+            print(f"⚠️  没有找到 test, validation 或 val 分割")
             print(f"   可用分割: {available_splits}")
             val_dataset = loaded_dataset[available_splits[0]]
 
