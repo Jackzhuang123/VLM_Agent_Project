@@ -163,26 +163,37 @@ class VLM_ActionAgent(nn.Module):
         """Load LLM from local path with optional 4-bit quantization"""
         print(f"Loading LLM model from: {self.llm_path}")
 
-        try:
-            # Configure 4-bit quantization if requested
-            if use_4bit:
+        # Try to use 4-bit quantization, but fall back if bitsandbytes is not available
+        bnb_config = None
+        actual_use_4bit = False
+
+        if use_4bit:
+            try:
+                # 尝试使用 4-bit 量化
                 bnb_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_quant_type="nf4",
                     bnb_4bit_compute_dtype=torch.bfloat16,
                 )
+                actual_use_4bit = True
                 print("✅ Using 4-bit quantization")
-            else:
+            except Exception as e:
+                print(f"⚠️  4-bit quantization unavailable ({type(e).__name__})")
+                print(f"   Falling back to full precision (higher memory usage)")
                 bnb_config = None
-                print("⚠️  Not using quantization (higher memory usage)")
+                actual_use_4bit = False
 
-            # Load model
+        if not actual_use_4bit and bnb_config is None:
+            print("⚠️  Not using quantization (higher memory usage)")
+
+        try:
+            # Load model with fallback strategy
             self.llm_model = AutoModelForCausalLM.from_pretrained(
                 self.llm_path,
                 local_files_only=True,
                 device_map="auto",
-                quantization_config=bnb_config if use_4bit else None,
+                quantization_config=bnb_config if actual_use_4bit else None,
                 torch_dtype=torch.bfloat16,
                 trust_remote_code=True,
             )
