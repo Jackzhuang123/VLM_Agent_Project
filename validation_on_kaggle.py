@@ -11,12 +11,20 @@
     - 生成详细的性能分析
 
 使用方式：
+    # Kaggle 环境（自动查找模型）
+    python validation_on_kaggle.py --checkpoint checkpoint_best.pt
+
+    # 或指定完整路径
     python validation_on_kaggle.py \
-        --checkpoint output/checkpoint_20260117_070153/checkpoint_best.pt \
+        --checkpoint /kaggle/input/vla-model/checkpoint_best.pt \
         --batch-size 4 \
         --num-workers 4 \
         --visualize \
         --save-samples 10
+
+    # 本地环境
+    python validation_on_kaggle.py \
+        --checkpoint output/checkpoint_20260117_070153/checkpoint_best.pt
 """
 
 import argparse
@@ -46,6 +54,48 @@ from src.dataset import LevirCCActionDataset
 from src.model import create_model
 
 
+def get_checkpoint_path(checkpoint_name_or_path):
+    """
+    获取检查点文件的完整路径
+
+    支持多种方式：
+    1. 完整路径: /kaggle/input/vla-model/checkpoint_best.pt
+    2. 相对路径: output/checkpoint_best.pt
+    3. 仅文件名: checkpoint_best.pt
+
+    优先级: /kaggle/input/vla-model > local output > 参数路径
+    """
+    # Kaggle 模型数据集默认位置
+    kaggle_model_paths = [
+        "/kaggle/input/vla-model/checkpoint_best.pt",
+        "/kaggle/input/vla-model",
+        "/kaggle/input/model-data-set",
+    ]
+
+    # 首先检查 Kaggle 输入目录
+    for path in kaggle_model_paths:
+        if Path(path).exists():
+            if Path(path).is_file():
+                return path
+            # 如果是目录，查找 checkpoint_best.pt
+            checkpoint_path = Path(path) / "checkpoint_best.pt"
+            if checkpoint_path.exists():
+                return str(checkpoint_path)
+
+    # 其次检查本地输出目录
+    local_paths = [
+        f"output/{checkpoint_name_or_path}",
+        checkpoint_name_or_path,
+    ]
+
+    for path in local_paths:
+        if Path(path).exists():
+            return path
+
+    # 返回参数提供的路径（即使不存在，让主函数报错）
+    return checkpoint_name_or_path
+
+
 def load_validation_data():
     """
     加载验证数据
@@ -53,6 +103,10 @@ def load_validation_data():
     支持两种数据结构：
     1. Arrow 格式（通过 datasets 库）
     2. 图像目录 + JSON 标注（本地结构）
+
+    优先级:
+    1. /kaggle/input/levir-cc-dataset (Kaggle)
+    2. Config.DATASET_PATH (本地配置)
     """
     print("\n" + "="*60)
     print("加载验证数据")
@@ -61,8 +115,16 @@ def load_validation_data():
     try:
         import datasets
 
+        # Kaggle 数据集的标准位置
+        kaggle_dataset_path = "/kaggle/input/levir-cc-dataset"
+
         # 尝试从 Arrow 格式加载
-        dataset_path = Config.DATASET_PATH
+        if Path(kaggle_dataset_path).exists():
+            dataset_path = kaggle_dataset_path
+            print(f"✅ 检测到 Kaggle 环境，使用数据集: {dataset_path}")
+        else:
+            dataset_path = Config.DATASET_PATH
+            print(f"📍 使用本地数据集路径: {dataset_path}")
 
         # 尝试多个可能的路径
         possible_paths = [
@@ -500,10 +562,22 @@ def save_validation_report(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='在 Kaggle 上使用已训练模型进行验证',
+        description='在 Kaggle 上使用已训练模型进行验证 (支持智能路径查找)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 示例用法:
+
+【Kaggle 环境】
+  # 快速验证（自动查找 /kaggle/input/vla-model/checkpoint_best.pt）
+  python validation_on_kaggle.py --checkpoint checkpoint_best.pt
+
+  # 指定完整路径
+  python validation_on_kaggle.py \\
+    --checkpoint /kaggle/input/vla-model/checkpoint_best.pt \\
+    --visualize \\
+    --save-samples 10
+
+【本地环境】
   # 基本验证
   python validation_on_kaggle.py \\
     --checkpoint output/checkpoint_20260117_070153/checkpoint_best.pt
@@ -526,6 +600,13 @@ def main():
   python validation_on_kaggle.py \\
     --checkpoint output/checkpoint_20260117_070153/checkpoint_best.pt \\
     --device cpu
+
+路径查找优先级:
+  1. /kaggle/input/vla-model/checkpoint_best.pt (Kaggle)
+  2. /kaggle/input/vla-model/ (Kaggle 目录)
+  3. /kaggle/input/model-data-set (备选 Kaggle 位置)
+  4. output/{checkpoint_name_or_path} (本地)
+  5. {checkpoint_name_or_path} (指定的路径)
         '''
     )
 
@@ -574,10 +655,16 @@ def main():
 
     args = parser.parse_args()
 
+    # 获取检查点路径（智能解析 Kaggle 路径）
+    checkpoint_path = get_checkpoint_path(args.checkpoint)
+
     # 验证检查点文件存在
-    if not Path(args.checkpoint).exists():
-        print(f"❌ 检查点文件不存在: {args.checkpoint}")
+    if not Path(checkpoint_path).exists():
+        print(f"❌ 检查点文件不存在: {checkpoint_path}")
+        print(f"   原始输入: {args.checkpoint}")
         return
+
+    args.checkpoint = checkpoint_path
 
     # 设备设置
     if args.device == 'auto':
