@@ -132,12 +132,20 @@ def load_validation_data():
         for split_name in split_order:
             candidate_path = images_dir / split_name
             if candidate_path.exists() and candidate_path.is_dir():
-                # 检查目录中是否有子文件夹（A, B）
-                subdirs = list(candidate_path.glob("*/"))
-                if subdirs:
-                    split_path = candidate_path
-                    print(f"✅ 找到 '{split_name}' 分割，包含 {len(subdirs)} 个样本集合")
-                    break
+                # 检查目录中是否有子文件夹（使用高效的 os.scandir）
+                try:
+                    subdirs = []
+                    with os.scandir(candidate_path) as entries:
+                        for entry in entries:
+                            if entry.is_dir(follow_symlinks=False):
+                                subdirs.append(entry.name)
+
+                    if subdirs:
+                        split_path = candidate_path
+                        print(f"✅ 找到 '{split_name}' 分割，包含 {len(subdirs)} 个样本集合")
+                        break
+                except OSError:
+                    continue
 
         if split_path is None:
             print(f"❌ 未找到有效的测试分割")
